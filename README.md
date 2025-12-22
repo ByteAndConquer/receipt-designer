@@ -12,6 +12,8 @@
 
 Whether you’re printing daily logs, random fortunes, or a clean monthly bill summary, Receipt Designer gives you the flexibility to explore and build your own workflow.
 
+Transport status: Network printing is tested and working. USB and Serial paths are experimental and need verification/adjustments (timeouts, device paths, write/flush behavior). Contributions welcome.
+
 ## 🗂️ Project Structure
 ```
 receipt_designer/

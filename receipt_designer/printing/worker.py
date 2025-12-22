@@ -1,3 +1,7 @@
+# TODO(transport): USB and SERIAL transports require verification and adjustments.
+# Only NETWORK printing has been tested and is known to work at this time.
+# Please update device discovery, timeouts, and write/flush logic for USB/SERIAL.
+
 from __future__ import annotations
 
 from typing import Optional
