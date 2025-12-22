@@ -1,41 +1,61 @@
-# Receipt Designer – Refactor Scaffold
+# 🧾 Receipt Designer
 
-This scaffold breaks the monolith into a package layout. It **does not** change runtime behavior yet:
-`ui/main_window.py` tries to import the extracted `MainWindow`, and falls back to `legacy/receipt_designer_v4.py` if needed.
+**Receipt Designer** is an open-source **PySide6** desktop app for designing and printing **ESC/POS** thermal receipts — made for tinkerers, makers, and developers who want freedom from rigid, proprietary software.
 
-## Structure
+## ✨ Features
+- 🎨 **Visual layered editor** for pixel-perfect receipt layouts  
+- 🧾 **Barcode & QR code embedding** for scannable designs  
+- 🖨️ **Configurable printer profiles** (USB, serial, or network)  
+- 🧩 **Modular architecture** — `core`, `ui`, `printing`, `legacy`  
+- 📄 **JSON template system** for reproducible, shareable receipts  
+- 🧠 **Extensible and script-friendly** — automate, integrate, experiment  
 
+Whether you’re printing daily logs, random fortunes, or a clean monthly bill summary, Receipt Designer gives you the flexibility to explore and build your own workflow.
+
+## 🗂️ Project Structure
 ```
 receipt_designer/
   app.py
   core/
-    models.py
-    commands.py
-    render.py
     barcodes.py
+    commands.py
+    models.py
+    render.py
   printing/
     backends.py
+    profiles.py
     worker.py
   ui/
     items.py
     layers.py
-    views.py
     main_window_impl.py
-    main_window.py        # Facade
+    main_window.py
+    properties.py
+    toolbox.py
+    views.py
   legacy/
-    receipt_designer_v4.py  # Original monolith
+    receipt_designer_v4.py
   assets/
+    Templates/
+    icons/
 ```
 
-## Next steps (suggested)
-1. Incrementally move logic from `legacy/receipt_designer_v4.py` into the above modules.
-2. Update imports in `ui/main_window_impl.py` to use `core.*`, `printing.*`, and `ui.*` modules.
-3. Remove legacy fallback once `MainWindow` exists in `ui/main_window_impl.py`.
-4. Add unit tests for `core/barcodes.py` and `core/render.py`.
-5. Consider adding a CLI: `python -m receipt_designer.app`.
+## 🚀 Getting Started
+```bash
+git clone https://github.com/ByteAndConquer/receipt-designer.git
+cd receipt-designer
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+source .venv/bin/activate
+pip install -e .            # or: pip install -r requirements.txt
+python -m receipt_designer  # launch the app
+```
 
-## License
+## 🧰 Development Tips
+- Run the app directly: `python -m receipt_designer`
+- Edit UI or core modules; no build step required
+- For PyInstaller builds, see `packaging/pyinstaller/ReceiptDesigner.spec`
+- Pull requests welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-This project is licensed under the MIT License.  
-See the [LICENSE](./LICENSE) file for details.
-
+## 🪶 License
+Licensed under the **MIT License** — see [LICENSE](./LICENSE) for details.
