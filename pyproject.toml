@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "receipt-designer"
+version = "0.1.0"
+description = "A desktop tool for designing and printing ESC/POS receipts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Josh Viles" }]
+keywords = ["escpos", "receipt", "designer", "PySide6", "thermal printer"]
+dependencies = [
+  "PySide6>=6.7",
+  "Pillow>=10.0",
+  "python-barcode>=0.15",
+  "qrcode[pil]>=7.4",
+  "pyserial>=3.5",
+  "pyusb>=1.2",
+  "python-escpos>=2.2",
+  "treepoem>=3.23",
+]
+
+[project.urls]
+Homepage = "https://github.com/ByteAndConquer/receipt-designer"
+Issues = "https://github.com/ByteAndConquer/receipt-designer/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["receipt_designer*"]
+
+[project.scripts]
+receipt-designer = "receipt_designer.app:main"
