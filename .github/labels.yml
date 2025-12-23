@@ -1,0 +1,164 @@
+# Core type labels
+- name: "type:bug"
+  color: "d73a4a"
+  description: "Broken or regressed behavior"
+
+- name: "type:feature"
+  color: "a2eeef"
+  description: "New capability or feature"
+
+- name: "type:enhancement"
+  color: "0366d6"
+  description: "Improvement to an existing feature"
+
+- name: "type:docs"
+  color: "0075ca"
+  description: "Documentation-only changes"
+
+- name: "type:refactor"
+  color: "cfd3d7"
+  description: "Internal code restructuring with no behavior change"
+
+- name: "type:test"
+  color: "bfd4f2"
+  description: "Tests or coverage work"
+
+- name: "type:ci"
+  color: "0e8a16"
+  description: "CI, workflows, and build configuration"
+
+- name: "type:chore"
+  color: "ededed"
+  description: "Repository maintenance tasks"
+
+- name: "type:release"
+  color: "5319e7"
+  description: "Versioning, packaging, and releases"
+
+- name: "type:security"
+  color: "e99695"
+  description: "Security-related work or vulnerabilities"
+
+
+# Priority labels
+- name: "priority:P0"
+  color: "b60205"
+  description: "Critical; blocks release or risks data loss"
+
+- name: "priority:P1"
+  color: "d93f0b"
+  description: "High impact; planned for current milestone"
+
+- name: "priority:P2"
+  color: "fbca04"
+  description: "Important but not urgent"
+
+- name: "priority:P3"
+  color: "c2e0c6"
+  description: "Nice-to-have or backlog item"
+
+
+# Status / workflow labels
+- name: "status:needs-triage"
+  color: "ededed"
+  description: "New issue; needs prioritization"
+
+- name: "status:needs-repro"
+  color: "fef2c0"
+  description: "Bug requires reliable reproduction steps"
+
+- name: "status:in-progress"
+  color: "94d3a2"
+  description: "Actively being worked on"
+
+- name: "status:blocked"
+  color: "e4e669"
+  description: "Blocked by dependency or decision"
+
+- name: "status:ready-for-review"
+  color: "bfdadc"
+  description: "Ready for PR review"
+
+- name: "status:help-wanted"
+  color: "008672"
+  description: "Community help welcome"
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Beginner-friendly starter task"
+
+
+# Area / component labels
+- name: "area:transport"
+  color: "1f6feb"
+  description: "Printing transports (Network, USB, Serial)"
+
+- name: "area:ui"
+  color: "a371f7"
+  description: "UI layer and PySide6 widgets"
+
+- name: "area:core"
+  color: "0b7285"
+  description: "Core models, rendering, and commands"
+
+- name: "area:printing"
+  color: "0969da"
+  description: "Printer backends, profiles, and workers"
+
+- name: "area:templates"
+  color: "8a63d2"
+  description: "JSON templates and sample assets"
+
+- name: "area:packaging"
+  color: "6f42c1"
+  description: "PyInstaller, packaging, and distribution"
+
+- name: "area:infra"
+  color: "2da44e"
+  description: "CI, repo automation, and tooling"
+
+- name: "area:performance"
+  color: "ff7b72"
+  description: "Performance and optimization work"
+
+
+# Platform / OS labels
+- name: "os:windows"
+  color: "2b7489"
+  description: "Windows-specific issues"
+
+- name: "os:macos"
+  color: "5319e7"
+  description: "macOS-specific issues"
+
+- name: "os:linux"
+  color: "1d76db"
+  description: "Linux-specific issues"
+
+
+# Housekeeping / moderation
+- name: "duplicate"
+  color: "cccccc"
+  description: "Duplicate of another issue"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "Will not be addressed"
+
+- name: "invalid"
+  color: "e4e4e4"
+  description: "Not actionable or incorrect"
+
+- name: "question"
+  color: "d4c5f9"
+  description: "Support question or clarification"
+
+- name: "design"
+  color: "ffdd57"
+  description: "UI/UX proposals and visual design work"
+
+
+# Meta / planning
+- name: "meta"
+  color: "000000"
+  description: "Tracking or umbrella issues"
