@@ -227,6 +227,40 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         layout.addWidget(self.grp_wrap)
 
+        # --- Text Padding ---
+        self.grp_padding = QtWidgets.QGroupBox("Text Padding")
+        padding_layout = QtWidgets.QFormLayout(self.grp_padding)
+
+        self.spin_pad_left = QtWidgets.QDoubleSpinBox()
+        self.spin_pad_left.setRange(0.0, 50.0)
+        self.spin_pad_left.setSingleStep(0.5)
+        self.spin_pad_left.setSuffix(" px")
+        self.spin_pad_left.valueChanged.connect(self._on_pad_left_changed)
+        padding_layout.addRow("Left:", self.spin_pad_left)
+
+        self.spin_pad_right = QtWidgets.QDoubleSpinBox()
+        self.spin_pad_right.setRange(0.0, 50.0)
+        self.spin_pad_right.setSingleStep(0.5)
+        self.spin_pad_right.setSuffix(" px")
+        self.spin_pad_right.valueChanged.connect(self._on_pad_right_changed)
+        padding_layout.addRow("Right:", self.spin_pad_right)
+
+        self.spin_pad_top = QtWidgets.QDoubleSpinBox()
+        self.spin_pad_top.setRange(0.0, 50.0)
+        self.spin_pad_top.setSingleStep(0.5)
+        self.spin_pad_top.setSuffix(" px")
+        self.spin_pad_top.valueChanged.connect(self._on_pad_top_changed)
+        padding_layout.addRow("Top:", self.spin_pad_top)
+
+        self.spin_pad_bottom = QtWidgets.QDoubleSpinBox()
+        self.spin_pad_bottom.setRange(0.0, 50.0)
+        self.spin_pad_bottom.setSingleStep(0.5)
+        self.spin_pad_bottom.setSuffix(" px")
+        self.spin_pad_bottom.valueChanged.connect(self._on_pad_bottom_changed)
+        padding_layout.addRow("Bottom:", self.spin_pad_bottom)
+
+        layout.addWidget(self.grp_padding)
+
         # --- Barcode ---
         self.grp_barcode = QtWidgets.QGroupBox("Barcode")
         bc_layout = QtWidgets.QFormLayout(self.grp_barcode)
@@ -394,6 +428,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             self.grp_font,
             self.grp_align,
             self.grp_wrap,
+            self.grp_padding,
             self.grp_layout,
             self.grp_barcode,
             self.grp_shape,
@@ -478,6 +513,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                     self.grp_font.setVisible(True)
                     self.grp_align.setVisible(True)
                     self.grp_wrap.setVisible(True)
+                    self.grp_padding.setVisible(True)
                     self.grp_layout.setVisible(True)
                     self.grp_barcode.setVisible(False)
                     self.grp_shape.setVisible(False)
@@ -514,6 +550,17 @@ class PropertiesPanel(QtWidgets.QWidget):
                     wrap_mode = getattr(elem, "wrap_mode", "word")
                     shrink = bool(getattr(elem, "shrink_to_fit", False))
                     max_lines = int(getattr(elem, "max_lines", 0) or 0)
+
+                    # Padding (already implemented in items.py)
+                    pad_left = float(getattr(elem, "pad_left", 0.0) or 0.0)
+                    pad_right = float(getattr(elem, "pad_right", 0.0) or 0.0)
+                    pad_top = float(getattr(elem, "pad_top", 0.0) or 0.0)
+                    pad_bottom = float(getattr(elem, "pad_bottom", 0.0) or 0.0)
+
+                    self.spin_pad_left.setValue(pad_left)
+                    self.spin_pad_right.setValue(pad_right)
+                    self.spin_pad_top.setValue(pad_top)
+                    self.spin_pad_bottom.setValue(pad_bottom)
 
                     # 👉 Only update the editor if the text actually changed,
                     # and preserve the cursor so typing doesn't get wrecked.
@@ -577,6 +624,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                     self.grp_font.setVisible(False)
                     self.grp_align.setVisible(False)
                     self.grp_wrap.setVisible(False)
+                    self.grp_padding.setVisible(False)
                     self.grp_shape.setVisible(False)
 
                     self._set_layout_enabled(True, True, True, True)
@@ -639,6 +687,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                     self.grp_font.setVisible(False)
                     self.grp_align.setVisible(False)
                     self.grp_wrap.setVisible(False)
+                    self.grp_padding.setVisible(False)
                     self.grp_barcode.setVisible(False)
                     self.grp_shape.setVisible(False)
                     self.grp_layout.setVisible(True)
@@ -678,6 +727,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(True)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -722,6 +772,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(True)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -760,6 +811,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(True)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -802,6 +854,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(True)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -843,6 +896,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(False)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -881,6 +935,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self.grp_font.setVisible(False)
                 self.grp_align.setVisible(False)
                 self.grp_wrap.setVisible(False)
+                self.grp_padding.setVisible(False)
                 self.grp_layout.setVisible(False)
                 self.grp_barcode.setVisible(False)
                 self.grp_shape.setVisible(True)
@@ -1358,6 +1413,34 @@ class PropertiesPanel(QtWidgets.QWidget):
             int(val),
             "Change HRT font size",
         )
+
+    def _on_pad_left_changed(self, val: float):
+        if self._updating_ui or self._mode != "text":
+            return
+        if self._current_elem is None:
+            return
+        self._push_elem_property("pad_left", float(val), "Change left padding")
+
+    def _on_pad_right_changed(self, val: float):
+        if self._updating_ui or self._mode != "text":
+            return
+        if self._current_elem is None:
+            return
+        self._push_elem_property("pad_right", float(val), "Change right padding")
+
+    def _on_pad_top_changed(self, val: float):
+        if self._updating_ui or self._mode != "text":
+            return
+        if self._current_elem is None:
+            return
+        self._push_elem_property("pad_top", float(val), "Change top padding")
+
+    def _on_pad_bottom_changed(self, val: float):
+        if self._updating_ui or self._mode != "text":
+            return
+        if self._current_elem is None:
+            return
+        self._push_elem_property("pad_bottom", float(val), "Change bottom padding")
 
     def _refresh_barcode_error(self) -> None:
         """

@@ -38,6 +38,96 @@ QtCore.QCoreApplication.setOrganizationName(ORG_NAME)
 QtCore.QCoreApplication.setApplicationName(APP_NAME)
 QtCore.QCoreApplication.setApplicationVersion(APP_VERSION)
 
+class PrintPreviewDialog(QtWidgets.QDialog):
+    """Modal dialog showing print preview with zoom controls"""
+    
+    def __init__(self, image: QtGui.QImage, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Print Preview")
+        self.image = image
+        self._zoom = 1.0
+        
+        self._build_ui()
+        self.resize(700, 900)
+    
+    def _build_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        # Info bar with zoom controls
+        info_layout = QtWidgets.QHBoxLayout()
+        self.lbl_info = QtWidgets.QLabel(
+            f"Preview: {self.image.width()}×{self.image.height()} px"
+        )
+        info_layout.addWidget(self.lbl_info)
+        info_layout.addStretch()
+        
+        # Zoom buttons
+        btn_zoom_out = QtWidgets.QPushButton("−")
+        btn_zoom_out.setMaximumWidth(30)
+        btn_zoom_out.clicked.connect(self._zoom_out)
+        
+        btn_zoom_in = QtWidgets.QPushButton("+")
+        btn_zoom_in.setMaximumWidth(30)
+        btn_zoom_in.clicked.connect(self._zoom_in)
+        
+        btn_zoom_fit = QtWidgets.QPushButton("Fit")
+        btn_zoom_fit.clicked.connect(self._zoom_fit)
+        
+        self.lbl_zoom = QtWidgets.QLabel("100%")
+        self.lbl_zoom.setMinimumWidth(50)
+        
+        info_layout.addWidget(btn_zoom_out)
+        info_layout.addWidget(self.lbl_zoom)
+        info_layout.addWidget(btn_zoom_in)
+        info_layout.addWidget(btn_zoom_fit)
+        
+        layout.addLayout(info_layout)
+        
+        # Scrollable image display
+        self.lbl_image = QtWidgets.QLabel()
+        self.lbl_image.setAlignment(QtCore.Qt.AlignCenter)
+        self._update_preview()
+        
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(self.lbl_image)
+        scroll.setWidgetResizable(False)
+        layout.addWidget(scroll)
+        
+        # Print / Cancel buttons
+        btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btn_box.button(QtWidgets.QDialogButtonBox.Ok).setText("Print")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+    
+    def _update_preview(self):
+        scaled = self.image.scaled(
+            int(self.image.width() * self._zoom),
+            int(self.image.height() * self._zoom),
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation
+        )
+        self.lbl_image.setPixmap(QtGui.QPixmap.fromImage(scaled))
+        self.lbl_zoom.setText(f"{int(self._zoom * 100)}%")
+    
+    def _zoom_in(self):
+        self._zoom = min(4.0, self._zoom * 1.25)
+        self._update_preview()
+    
+    def _zoom_out(self):
+        self._zoom = max(0.25, self._zoom / 1.25)
+        self._update_preview()
+    
+    def _zoom_fit(self):
+        scroll = self.lbl_image.parent()
+        if isinstance(scroll, QtWidgets.QScrollArea):
+            viewport_size = scroll.viewport().size()
+            w_ratio = viewport_size.width() / self.image.width()
+            h_ratio = viewport_size.height() / self.image.height()
+            self._zoom = min(w_ratio, h_ratio) * 0.95
+            self._update_preview()
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -60,11 +150,19 @@ class MainWindow(QtWidgets.QMainWindow):
         # Layer refresh re-entrancy guard
         self._layer_refreshing = False
 
+        self._current_file_path: str | None = None
+        self._has_unsaved_changes = False
+        self._auto_save_timer = QtCore.QTimer(self)
+        self._auto_save_timer.timeout.connect(self._auto_save)
+        self._auto_save_timer.start(60000)  # 60 seconds
+        
+
         self._build_scene_view()
         self._build_toolbars_menus()
         self._build_docks()
 
         self.update_paper()
+        self._load_crash_recovery()
         self.apply_theme()
         self.statusBar().showMessage("Ready. Loaded saved printer settings.")
 
@@ -101,6 +199,8 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.view)
         self.setCentralWidget(central)
 
+        self.scene.changed.connect(self._mark_unsaved)
+
     def _build_toolbars_menus(self):
         # ---- Undo/Redo ----
         act_undo = self.undo_stack.createUndoAction(self, "Undo")
@@ -120,11 +220,17 @@ class MainWindow(QtWidgets.QMainWindow):
         act_save.triggered.connect(self.save_template)
         tb_main.addAction(act_save)
 
+        
+
         act_load = QtGui.QAction("Load", self)
         act_load.triggered.connect(self.load_template)
         tb_main.addAction(act_load)
 
         tb_main.addSeparator()
+
+        act_preview = QtGui.QAction("Preview", self)
+        act_preview.triggered.connect(self.preview_print)
+        tb_main.addAction(act_preview)
 
         # Print / Config
         act_print = QtGui.QAction("Print", self)
@@ -387,6 +493,11 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(act_save)
 
         file_menu.addSeparator()
+        self.recent_menu = file_menu.addMenu("Recent Files")
+        self._refresh_recent_menu()
+        file_menu.addSeparator()
+
+        file_menu.addSeparator()
 
         act_export_png = QtGui.QAction("Export as PNG…", self)
         act_export_png.triggered.connect(self.export_png)
@@ -397,6 +508,11 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(act_export_pdf)
 
         file_menu.addSeparator()
+
+        act_file_preview = QtGui.QAction("Print Preview…", self)
+        act_file_preview.setShortcut("Ctrl+Shift+P")
+        act_file_preview.triggered.connect(self.preview_print)
+        file_menu.addAction(act_file_preview)
 
         act_file_print = QtGui.QAction("Print…", self)
         act_file_print.setShortcut("Ctrl+P")
@@ -1133,6 +1249,9 @@ class MainWindow(QtWidgets.QMainWindow):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(t.to_dict(), f, indent=2)
         self.statusBar().showMessage(f"Saved: {path}", 3000)
+        self._update_recent_files(path)
+        self._current_file_path = path
+        self._has_unsaved_changes = False
 
     def load_template(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -1153,7 +1272,236 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.update_paper()
         self._refresh_layers_safe()
+        
+        # Patch 3 additions:
+        self._current_file_path = path
+        self._add_to_recent_files(path)
+        self._has_unsaved_changes = False
+        self.undo_stack.clear()
+        
         self.statusBar().showMessage(f"Loaded: {path}", 3000)
+
+    def _mark_unsaved(self):
+        """Mark that changes have been made (called when scene changes)"""
+        self._has_unsaved_changes = True
+
+    def _auto_save(self):
+        """Auto-save current template to temp location every 60 seconds"""
+        if not self.scene.items():
+            return  # Nothing to save
+        
+        temp_dir = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.TempLocation
+        )
+        if not temp_dir:
+            return
+        
+        autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
+        
+        try:
+            # Collect elements from scene
+            elements = []
+            for it in self.scene.items():
+                if isinstance(it, GItem):
+                    elements.append(it.elem.to_dict())
+            
+            # Create template snapshot
+            t = Template(
+                width_mm=self.template.width_mm,
+                height_mm=self.template.height_mm,
+                dpi=self.template.dpi,
+                margins_mm=self.template.margins_mm,
+                elements=[Element.from_dict(e) for e in elements],
+                guides=self.template.guides,
+                grid=self.template.grid,
+                name=self.template.name,
+                version=self.template.version,
+            )
+            
+            # Save to temp file
+            with open(autosave_path, "w", encoding="utf-8") as f:
+                json.dump(t.to_dict(), f, indent=2)
+            
+            # Brief status update
+            if self._has_unsaved_changes:
+                self.statusBar().showMessage("Auto-saved", 2000)
+                
+        except Exception as e:
+            # Don't crash on auto-save failure
+            print(f"Auto-save failed: {e}")
+
+    def _load_crash_recovery(self):
+        """Check for auto-saved file on startup and offer to restore"""
+        temp_dir = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.TempLocation
+        )
+        if not temp_dir:
+            return
+        
+        autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
+        
+        if not os.path.exists(autosave_path):
+            return
+        
+        # Ask user if they want to restore
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Recover Auto-saved Work?",
+            "An auto-saved file was found. Would you like to restore it?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            try:
+                with open(autosave_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                self.template = Template.from_dict(data)
+                
+                # Clear scene and rebuild
+                self.scene.clear()
+                for e in self.template.elements:
+                    item = GItem(e)
+                    item.undo_stack = self.undo_stack
+                    self.scene.addItem(item)
+                    item.setPos(e.x, e.y)
+                
+                self.update_paper()
+                self._refresh_layers_safe()
+                self.statusBar().showMessage("Auto-saved work restored", 3000)
+                
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Recovery Failed",
+                    f"Could not restore auto-saved file: {e}"
+                )
+        
+        # Delete auto-save file after handling (whether accepted or not)
+        try:
+            os.remove(autosave_path)
+        except:
+            pass
+
+    def _refresh_recent_menu(self):
+        """Refresh the Recent Files menu from settings"""
+        if not hasattr(self, 'recent_menu'):
+            return
+        
+        self.recent_menu.clear()
+        
+        recent = self.settings.value("recent_files", [], type=list)
+        
+        if not recent:
+            act_none = self.recent_menu.addAction("(No recent files)")
+            act_none.setEnabled(False)
+            return
+        
+        # Show up to 10 recent files
+        for path in recent[:10]:
+            if not os.path.exists(path):
+                continue
+            
+            # Show filename, full path in tooltip
+            filename = os.path.basename(path)
+            act = self.recent_menu.addAction(filename)
+            act.setToolTip(path)
+            # Use lambda with default argument to capture path correctly
+            act.triggered.connect(lambda checked, p=path: self._load_template_path(p))
+        
+        self.recent_menu.addSeparator()
+        
+        act_clear = self.recent_menu.addAction("Clear Recent Files")
+        act_clear.triggered.connect(self._clear_recent_files)
+
+    def _update_recent_files(self, path: str):
+        """Add a file to the recent files list"""
+        if not path:
+            return
+        
+        path = os.path.abspath(path)
+        
+        recent = self.settings.value("recent_files", [], type=list)
+        
+        # Remove if already in list
+        if path in recent:
+            recent.remove(path)
+        
+        # Add to front
+        recent.insert(0, path)
+        
+        # Keep only 10 most recent
+        recent = recent[:10]
+        
+        self.settings.setValue("recent_files", recent)
+        self._refresh_recent_menu()
+
+    def _load_template_path(self, path: str):
+        """Load template from a specific file path"""
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"Template file not found:\n{path}"
+            )
+            # Remove from recent files
+            recent = self.settings.value("recent_files", [], type=list)
+            if path in recent:
+                recent.remove(path)
+                self.settings.setValue("recent_files", recent)
+                self._refresh_recent_menu()
+            return
+        
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            self.template = Template.from_dict(data)
+            
+            self.scene.clear()
+            for e in self.template.elements:
+                item = GItem(e)
+                item.undo_stack = self.undo_stack
+                self.scene.addItem(item)
+                item.setPos(e.x, e.y)
+            
+            self.update_paper()
+            self._refresh_layers_safe()
+            
+            self._current_file_path = path
+            self._has_unsaved_changes = False
+            
+            self.statusBar().showMessage(f"Loaded: {os.path.basename(path)}", 3000)
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Load Error",
+                f"Could not load template:\n{e}"
+            )
+
+    def _clear_recent_files(self):
+        """Clear the recent files list"""
+        self.settings.setValue("recent_files", [])
+        self._refresh_recent_menu()
+
+    def preview_print(self):
+        """Show print preview dialog before printing"""
+        img = scene_to_image(self.scene, scale=1.0)
+        
+        if img is None or img.isNull():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Preview Error",
+                "Could not render scene for preview"
+            )
+            return
+        
+        dlg = PrintPreviewDialog(img, self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            # User clicked "Print" in the preview dialog
+            self.print_now()
 
     # -------------------------
     # Fortune helper
