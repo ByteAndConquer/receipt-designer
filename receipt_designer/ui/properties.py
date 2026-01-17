@@ -45,9 +45,30 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         self._groups: list[QtWidgets.QGroupBox] = []
 
+        # ========== NEW: Patch 8 - Text edit undo buffering ==========
+        # Text content buffering
+        self._text_undo_timer = QtCore.QTimer(self)
+        self._text_undo_timer.setSingleShot(True)
+        self._text_undo_timer.setInterval(1000)  # 1 second pause = commit to undo
+        self._text_undo_timer.timeout.connect(self._commit_text_to_undo)
+        
+        self._pending_text_item = None
+        self._pending_text_old_value = None
+        
+        # Font size buffering (optional but recommended)
+        self._font_size_undo_timer = QtCore.QTimer(self)
+        self._font_size_undo_timer.setSingleShot(True)
+        self._font_size_undo_timer.setInterval(500)  # 500ms for numeric inputs
+        self._font_size_undo_timer.timeout.connect(self._commit_font_size_to_undo)
+        
+        self._pending_font_size_item = None
+        self._pending_font_size_old_value = None
+        # ========== END NEW ==========
+
         self._build_ui()
         self._set_active(False)
         self.lbl_target.setText("")
+        
 
     def bind_item(self, item: Optional[GItem]) -> None:
         """
@@ -174,7 +195,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         font_layout.addRow("Family:", self.font_combo)
 
         self.spin_font_size = QtWidgets.QSpinBox()
-        self.spin_font_size.setRange(4, 72)
+        self.spin_font_size.setRange(1, 300)
         self.spin_font_size.valueChanged.connect(self._on_font_size_changed)
         font_layout.addRow("Size (pt):", self.spin_font_size)
 
@@ -463,6 +484,13 @@ class PropertiesPanel(QtWidgets.QWidget):
         """
         Called by MainWindow when selection changes.
         """
+
+        # ========== NEW: Patch 8 - Commit pending text edits before switching items ==========
+        if self._text_undo_timer.isActive():
+            self._text_undo_timer.stop()
+            self._commit_text_to_undo()
+        # ========== END NEW ==========
+
         self._updating_ui = True
         try:
             self._current_item = None
@@ -1089,12 +1117,63 @@ class PropertiesPanel(QtWidgets.QWidget):
     # --------------------- text slots ---------------------
 
     def _on_text_changed(self):
+        """Handle text content changes with undo buffering"""
         if self._updating_ui or self._mode != "text":
             return
         if self._current_elem is None:
             return
-        txt = self.txt_content.toPlainText()
-        self._push_elem_property("text", txt, "Change text")
+        
+        # First edit on this item - store original value
+        if self._pending_text_item != self._current_item:
+            # Commit any pending changes from previous item
+            if self._pending_text_item is not None:
+                self._commit_text_to_undo()
+            
+            self._pending_text_item = self._current_item
+            self._pending_text_old_value = self._current_elem.text
+        
+        # Update element immediately (live preview)
+        new_text = self.txt_content.toPlainText()
+        self._current_elem.text = new_text
+        if self._current_item:
+            self._current_item.update()  # Refresh the visual
+        
+        # Restart the undo timer - will commit after 1 second of no typing
+        self._text_undo_timer.stop()
+        self._text_undo_timer.start()
+
+    def _commit_text_to_undo(self):
+        """Commit accumulated text changes to undo stack"""
+        if self._pending_text_item is None:
+            return
+        
+        # Get current value from the element
+        if self._pending_text_item == self._current_item and self._current_elem:
+            new_value = self._current_elem.text
+        else:
+            # Item changed, get from pending item's element
+            new_value = self._pending_text_item.elem.text if hasattr(self._pending_text_item, 'elem') else ""
+        
+        old_value = self._pending_text_old_value
+        
+        # Only create undo command if text actually changed
+        if new_value != old_value:
+            # Use the existing _push_elem_property infrastructure
+            elem = self._pending_text_item.elem if hasattr(self._pending_text_item, 'elem') else self._current_elem
+            if elem:
+                cmd = PropertyChangeCmd(
+                    elem,
+                    "text",
+                    old_value,
+                    new_value,
+                    self._pending_text_item
+                )
+                if self._undo_stack:
+                    self._undo_stack.push(cmd)
+        
+        # Clear pending state
+        self._pending_text_item = None
+        self._pending_text_old_value = None
 
     def _on_font_changed(self, qfont: QtGui.QFont):
         if self._updating_ui or self._mode != "text":

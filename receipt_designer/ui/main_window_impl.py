@@ -145,6 +145,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo_stack.indexChanged.connect(self._on_undo_redo_changed)
         self._workers: set[PrinterWorker] = set()
         self._column_guides: list[GuideLineItem] = []
+        self._alignment_guides: list[QtWidgets.QGraphicsLineItem] = []
+        self._alignment_guide_pen = QtGui.QPen(QtGui.QColor(255, 0, 255), 1, QtCore.Qt.DashLine)
+        self._last_duplicate_offset = QtCore.QPointF(10, 10)  # Default 10px offset
         self._snap_guard = False
 
         # Layer refresh re-entrancy guard
@@ -160,6 +163,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_scene_view()
         self._build_toolbars_menus()
         self._build_docks()
+        self.scene.column_guide_positions = []
 
         self.update_paper()
         self._load_crash_recovery()
@@ -205,8 +209,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # ---- Undo/Redo ----
         act_undo = self.undo_stack.createUndoAction(self, "Undo")
         act_undo.setShortcut(QtGui.QKeySequence.Undo)
+        act_undo.setToolTip("Undo last action (Ctrl+Z)")  # ← Patch 10
+        
         act_redo = self.undo_stack.createRedoAction(self, "Redo")
         act_redo.setShortcut(QtGui.QKeySequence.Redo)
+        act_redo.setToolTip("Redo previously undone action (Ctrl+Y or Ctrl+Shift+Z)")  # ← Patch 10
 
         # =============================
         # Main toolbar: file/print/printer/page
@@ -217,27 +224,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # File (quick save/load current template)
         act_save = QtGui.QAction("Save", self)
+        act_save.setToolTip("Save current template to file (Ctrl+S)")  # ← Patch 10
         act_save.triggered.connect(self.save_template)
         tb_main.addAction(act_save)
 
-        
-
         act_load = QtGui.QAction("Load", self)
+        act_load.setToolTip("Open template from file (Ctrl+O)")  # ← Patch 10
         act_load.triggered.connect(self.load_template)
         tb_main.addAction(act_load)
 
         tb_main.addSeparator()
 
         act_preview = QtGui.QAction("Preview", self)
+        act_preview.setToolTip("Preview how the receipt will look before printing (Ctrl+Shift+P)")  # ← Patch 10
         act_preview.triggered.connect(self.preview_print)
         tb_main.addAction(act_preview)
 
         # Print / Config
         act_print = QtGui.QAction("Print", self)
+        act_print.setToolTip("Send template to thermal printer (Ctrl+P)")  # ← Patch 10
         act_print.triggered.connect(self.print_now)
         tb_main.addAction(act_print)
 
         act_conf = QtGui.QAction("Config", self)
+        act_conf.setToolTip("Configure printer connection and settings")  # ← Patch 10
         act_conf.triggered.connect(self.configure_printer)
         tb_main.addAction(act_conf)
 
@@ -245,10 +255,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Transport
         act_feed = QtGui.QAction("Feed", self)
+        act_feed.setToolTip("Feed paper through printer without printing")  # ← Patch 10
         act_feed.triggered.connect(lambda: self.quick_action("feed"))
         tb_main.addAction(act_feed)
 
         act_cut_btn = QtGui.QAction("Cut", self)
+        act_cut_btn.setToolTip("Cut paper at current position")  # ← Patch 10
         act_cut_btn.triggered.connect(lambda: self.quick_action("cut"))
         tb_main.addAction(act_cut_btn)
 
@@ -265,6 +277,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sb_darkness.setAccelerated(True)
         self.sb_darkness.setValue(int(self.printer_cfg.get("darkness", 180)))
         self.sb_darkness.valueChanged.connect(self._on_darkness_changed)
+        self.sb_darkness.setToolTip(  # ← Patch 10
+            "Print darkness level (1-255)\n"
+            "Higher values = darker print\n"
+            "Recommended: 150-200"
+        )
         tb_main.addWidget(self.sb_darkness)
 
         tb_main.addSeparator()
@@ -276,6 +293,12 @@ class MainWindow(QtWidgets.QMainWindow):
         _cut_map = {"full": "Full", "partial": "Partial", "none": "None"}
         self.cb_cut.setCurrentText(_cut_map.get(_cut_saved, "Partial"))
         self.cb_cut.currentTextChanged.connect(self._on_cut_changed)
+        self.cb_cut.setToolTip(  # ← Patch 10
+            "Paper cutting mode:\n"
+            "• Full: Complete cut through paper\n"
+            "• Partial: Perforation for easy tearing\n"
+            "• None: No cutting (continuous paper)"
+        )
         tb_main.addWidget(self.cb_cut)
 
         # ---- Printer profile selector ----
@@ -286,6 +309,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.profile_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         self._refresh_profile_combo()
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        self.profile_combo.setToolTip("Select saved printer profile")  # ← Patch 10
         tb_main.addWidget(self.profile_combo)
 
         # ---- Page size controls ----
@@ -295,6 +319,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cb_w_mm.setEditable(True)
         self.cb_w_mm.addItems(["58 mm", "80 mm", "100 mm"])
         self.cb_w_mm.setCurrentText(f"{int(self.template.width_mm)} mm")
+        self.cb_w_mm.setToolTip("Paper width in millimeters (common: 58mm, 80mm)")  # ← Patch 10
         tb_main.addWidget(self.cb_w_mm)
 
         tb_main.addWidget(QtWidgets.QLabel("Height:"))
@@ -302,6 +327,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cb_h_mm.setEditable(True)
         self.cb_h_mm.addItems(["50 mm", "75 mm", "200 mm", "300 mm"])
         self.cb_h_mm.setCurrentText(f"{int(self.template.height_mm)} mm")
+        self.cb_h_mm.setToolTip("Paper height in millimeters")  # ← Patch 10
         tb_main.addWidget(self.cb_h_mm)
 
         def _apply_page():
@@ -334,40 +360,41 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_align_use_margins.setCheckable(True)
         self.act_align_use_margins.setChecked(True)
         self.act_align_use_margins.setToolTip(
-            "When checked: align relative to printable margins.\n"
-            "When unchecked: align relative to full page."
+            "Align to margins vs full page:\n"
+            "• Checked: Align relative to printable area (respects margins)\n"
+            "• Unchecked: Align relative to full page edges"
         )
         tb_layout.addAction(self.act_align_use_margins)
 
         act_align_left = QtGui.QAction("⟵", self)
-        act_align_left.setToolTip("Align Left")
+        act_align_left.setToolTip("Align selected items to left edge")  # ← Patch 10
         act_align_left.triggered.connect(lambda: self._align_selected("left"))
         tb_layout.addAction(act_align_left)
 
         act_align_hcenter = QtGui.QAction("↔", self)
-        act_align_hcenter.setToolTip("Align Horizontal Center")
+        act_align_hcenter.setToolTip("Align selected items to horizontal center")  # ← Patch 10
         act_align_hcenter.triggered.connect(lambda: self._align_selected("hcenter"))
         tb_layout.addAction(act_align_hcenter)
 
         act_align_right = QtGui.QAction("⟶", self)
-        act_align_right.setToolTip("Align Right")
+        act_align_right.setToolTip("Align selected items to right edge")  # ← Patch 10
         act_align_right.triggered.connect(lambda: self._align_selected("right"))
         tb_layout.addAction(act_align_right)
 
         tb_layout.addSeparator()
 
         act_align_top = QtGui.QAction("⟰", self)
-        act_align_top.setToolTip("Align Top")
+        act_align_top.setToolTip("Align selected items to top edge")  # ← Patch 10
         act_align_top.triggered.connect(lambda: self._align_selected("top"))
         tb_layout.addAction(act_align_top)
 
         act_align_vcenter = QtGui.QAction("↕", self)
-        act_align_vcenter.setToolTip("Align Vertical Middle")
+        act_align_vcenter.setToolTip("Align selected items to vertical center")  # ← Patch 10
         act_align_vcenter.triggered.connect(lambda: self._align_selected("vcenter"))
         tb_layout.addAction(act_align_vcenter)
 
         act_align_bottom = QtGui.QAction("⟱", self)
-        act_align_bottom.setToolTip("Align Bottom")
+        act_align_bottom.setToolTip("Align selected items to bottom edge")  # ← Patch 10
         act_align_bottom.triggered.connect(lambda: self._align_selected("bottom"))
         tb_layout.addAction(act_align_bottom)
 
@@ -376,12 +403,12 @@ class MainWindow(QtWidgets.QMainWindow):
         tb_layout.addWidget(QtWidgets.QLabel("Distrib:"))
 
         act_dist_h = QtGui.QAction("H", self)
-        act_dist_h.setToolTip("Distribute Horizontally (centers)")
+        act_dist_h.setToolTip("Distribute selected items evenly across horizontal space")  # ← Patch 10
         act_dist_h.triggered.connect(lambda: self._distribute_selected("h"))
         tb_layout.addAction(act_dist_h)
 
         act_dist_v = QtGui.QAction("V", self)
-        act_dist_v.setToolTip("Distribute Vertically (centers)")
+        act_dist_v.setToolTip("Distribute selected items evenly across vertical space")  # ← Patch 10
         act_dist_v.triggered.connect(lambda: self._distribute_selected("v"))
         tb_layout.addAction(act_dist_v)
 
@@ -390,13 +417,13 @@ class MainWindow(QtWidgets.QMainWindow):
         tb_layout.addWidget(QtWidgets.QLabel("Group:"))
 
         act_group = QtGui.QAction("Grp", self)
-        act_group.setToolTip("Group selected items (Ctrl+G)")
+        act_group.setToolTip("Group selected items together (Ctrl+G)\nGrouped items move as one unit")  # ← Patch 10
         act_group.setShortcut("Ctrl+G")
         act_group.triggered.connect(self._group_selected)
         tb_layout.addAction(act_group)
 
         act_ungroup = QtGui.QAction("Ungrp", self)
-        act_ungroup.setToolTip("Ungroup selected groups (Ctrl+Shift+G)")
+        act_ungroup.setToolTip("Ungroup selected group (Ctrl+Shift+G)\nSeparates items in a group")  # ← Patch 10
         act_ungroup.setShortcut("Ctrl+Shift+G")
         act_ungroup.triggered.connect(self._ungroup_selected)
         tb_layout.addAction(act_ungroup)
@@ -407,25 +434,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Bring to front
         act_front = QtGui.QAction("Front", self)
-        act_front.setToolTip("Bring selected item to the very front")
+        act_front.setToolTip("Bring to front\nMove selected item above all others")  # ← Patch 10
         act_front.triggered.connect(lambda: self._change_z_order("front"))
         tb_layout.addAction(act_front)
 
         # Send to back
         act_back = QtGui.QAction("Back", self)
-        act_back.setToolTip("Send selected item to the very back")
+        act_back.setToolTip("Send to back\nMove selected item below all others")  # ← Patch 10
         act_back.triggered.connect(lambda: self._change_z_order("back"))
         tb_layout.addAction(act_back)
 
         # One step forward
         act_up = QtGui.QAction("Raise", self)
-        act_up.setToolTip("Move selected item one step forward")
+        act_up.setToolTip("Bring forward\nMove selected item one layer up")  # ← Patch 10
         act_up.triggered.connect(lambda: self._change_z_order("up"))
         tb_layout.addAction(act_up)
 
         # One step backward
         act_down = QtGui.QAction("Lower", self)
-        act_down.setToolTip("Move selected item one step backward")
+        act_down.setToolTip("Send backward\nMove selected item one layer down")  # ← Patch 10
         act_down.triggered.connect(lambda: self._change_z_order("down"))
         tb_layout.addAction(act_down)
 
@@ -434,22 +461,22 @@ class MainWindow(QtWidgets.QMainWindow):
         tb_layout.addWidget(QtWidgets.QLabel("Lock:"))
 
         act_lock = QtGui.QAction("Lock", self)
-        act_lock.setToolTip("Lock selected items (prevent moving/resizing)")
+        act_lock.setToolTip("Lock selected items\nPrevents moving, resizing, and editing")  # ← Patch 10
         act_lock.triggered.connect(self._lock_selected)
         tb_layout.addAction(act_lock)
 
         act_unlock = QtGui.QAction("Unlock", self)
-        act_unlock.setToolTip("Unlock selected items")
+        act_unlock.setToolTip("Unlock selected items\nAllows moving, resizing, and editing")  # ← Patch 10
         act_unlock.triggered.connect(self._unlock_selected)
         tb_layout.addAction(act_unlock)
 
         act_hide = QtGui.QAction("Hide", self)
-        act_hide.setToolTip("Hide selected items")
+        act_hide.setToolTip("Hide selected items\nMakes items invisible (won't print)")  # ← Patch 10
         act_hide.triggered.connect(self._hide_selected)
         tb_layout.addAction(act_hide)
 
         act_show_all = QtGui.QAction("Unhide", self)
-        act_show_all.setToolTip("Show all hidden items")
+        act_show_all.setToolTip("Show all hidden items\nMakes all items visible again")  # ← Patch 10
         act_show_all.triggered.connect(self._show_all_hidden)
         tb_layout.addAction(act_show_all)
 
@@ -463,16 +490,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sb_baseline_mm.setSingleStep(0.5)
         self.sb_baseline_mm.setValue(4.0)
         self.sb_baseline_mm.setSuffix(" mm")
+        self.sb_baseline_mm.setToolTip(  # ← Patch 10
+            "Baseline grid spacing in millimeters\n"
+            "Used to align text to consistent vertical rhythm"
+        )
         tb_layout.addWidget(self.sb_baseline_mm)
 
         act_baseline_apply = QtGui.QAction("Apply", self)
-        act_baseline_apply.setToolTip("Snap selected items' Y to baseline grid")
+        act_baseline_apply.setToolTip(  # ← Patch 10
+            "Snap to baseline grid\n"
+            "Aligns selected items' Y position to baseline grid"
+        )
         act_baseline_apply.triggered.connect(self._apply_baseline_to_selected)
         tb_layout.addAction(act_baseline_apply)
 
         # Shortcut: Delete selected items
         self._shortcut_delete = QtGui.QShortcut(QtGui.QKeySequence.Delete, self)
         self._shortcut_delete.activated.connect(self._delete_selected_items)
+
+        # ========== Patch 10: Duplicate shortcut ==========
+        self._shortcut_duplicate = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+D"), self)
+        self._shortcut_duplicate.activated.connect(self._duplicate_selected_items)
+        # ========== END Patch 10 ==========
 
         # =============================
         # Menubar
@@ -484,11 +523,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         act_open = QtGui.QAction("Open Template…", self)
         act_open.setShortcut("Ctrl+O")
+        act_open.setToolTip("Open template from file (Ctrl+O)")
         act_open.triggered.connect(self.load_template)
         file_menu.addAction(act_open)
 
         act_save = QtGui.QAction("Save Template…", self)
         act_save.setShortcut("Ctrl+S")
+        act_save.setToolTip("Save current template to file (Ctrl+S)")
         act_save.triggered.connect(self.save_template)
         file_menu.addAction(act_save)
 
@@ -500,10 +541,12 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addSeparator()
 
         act_export_png = QtGui.QAction("Export as PNG…", self)
+        act_export_png.setToolTip("Export template as PNG image file")  # ← Patch 10
         act_export_png.triggered.connect(self.export_png)
         file_menu.addAction(act_export_png)
 
         act_export_pdf = QtGui.QAction("Export as PDF…", self)
+        act_export_pdf.setToolTip("Export template as PDF document")  # ← Patch 10
         act_export_pdf.triggered.connect(self.export_pdf)
         file_menu.addAction(act_export_pdf)
 
@@ -511,25 +554,53 @@ class MainWindow(QtWidgets.QMainWindow):
 
         act_file_preview = QtGui.QAction("Print Preview…", self)
         act_file_preview.setShortcut("Ctrl+Shift+P")
+        act_file_preview.setToolTip("Preview how the receipt will look before printing (Ctrl+Shift+P)")  # ← Patch 10
         act_file_preview.triggered.connect(self.preview_print)
         file_menu.addAction(act_file_preview)
 
         act_file_print = QtGui.QAction("Print…", self)
         act_file_print.setShortcut("Ctrl+P")
+        act_file_print.setToolTip("Send template to thermal printer (Ctrl+P)")  # ← Patch 10
         act_file_print.triggered.connect(self.print_now)
         file_menu.addAction(act_file_print)
 
         file_menu.addSeparator()
 
         act_exit = QtGui.QAction("Exit", self)
+        act_exit.setToolTip("Exit the application")  # ← Patch 10
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
+
+        # In _build_toolbars_menus(), find or create the Edit menu:
+        edit_menu = menubar.addMenu("&Edit")
+
+        # Add undo/redo if not already there
+        edit_menu.addAction(act_undo)
+        edit_menu.addAction(act_redo)
+        edit_menu.addSeparator()
+
+        # ========== Patch 10: Duplicate menu items ==========
+        act_duplicate = QtGui.QAction("Duplicate", self)
+        act_duplicate.setShortcut("Ctrl+D")
+        act_duplicate.setToolTip("Duplicate selected items (Ctrl+D)")
+        act_duplicate.triggered.connect(self._duplicate_selected_items)
+        edit_menu.addAction(act_duplicate)
+
+        act_set_dup_offset = QtGui.QAction("Set Duplicate Offset…", self)
+        act_set_dup_offset.setToolTip("Change the offset used when duplicating items")
+        act_set_dup_offset.triggered.connect(self._set_duplicate_offset_dialog)
+        edit_menu.addAction(act_set_dup_offset)
+        # ========== END Patch 10 ==========
 
         # View
         self.action_margins = QtGui.QAction("Show Printable Margins", self)
         self.action_margins.setCheckable(True)
         self.action_margins.setChecked(True)
         self.action_margins.setShortcut("Ctrl+M")
+        self.action_margins.setToolTip(  # ← Patch 10
+            "Toggle margin guides\n"
+            "Shows printable area boundaries (Ctrl+M)"
+        )
         self.action_margins.toggled.connect(self._on_toggle_margins)
 
         view_menu = menubar.addMenu("&View")
@@ -541,12 +612,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # Text
         act_add_text = QtGui.QAction("Text", self)
         act_add_text.setShortcut("Ctrl+Shift+T")
+        act_add_text.setToolTip("Insert text element (Ctrl+Shift+T)\nAdd editable text to receipt")  # ← Patch 10
         act_add_text.triggered.connect(self.add_text)
         insert_menu.addAction(act_add_text)
 
         # Barcode
         act_add_barcode = QtGui.QAction("Barcode", self)
         act_add_barcode.setShortcut("Ctrl+Shift+B")
+        act_add_barcode.setToolTip("Insert barcode element (Ctrl+Shift+B)\nAdd scannable barcode")  # ← Patch 10
         act_add_barcode.triggered.connect(self.add_barcode)
         insert_menu.addAction(act_add_barcode)
 
@@ -555,15 +628,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # Image
         act_add_image = QtGui.QAction("Image…", self)
         act_add_image.setShortcut("Ctrl+Shift+I")
+        act_add_image.setToolTip("Insert image from file (Ctrl+Shift+I)\nAdd logo or picture")  # ← Patch 10
         act_add_image.triggered.connect(self.add_image)
         insert_menu.addAction(act_add_image)
 
         insert_menu.addSeparator()
 
-
         # Line
         act_add_line = QtGui.QAction("Line", self)
         act_add_line.setShortcut("Ctrl+Shift+L")
+        act_add_line.setToolTip("Insert line (Ctrl+Shift+L)\nAdd horizontal or vertical line")  # ← Patch 10
         act_add_line.triggered.connect(self.add_line)
         insert_menu.addAction(act_add_line)
 
@@ -571,30 +645,35 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "add_rect"):
             act_add_rect = QtGui.QAction("Rectangle", self)
             act_add_rect.setShortcut("Ctrl+Shift+R")
+            act_add_rect.setToolTip("Insert rectangle (Ctrl+Shift+R)\nAdd rectangular shape")  # ← Patch 10
             act_add_rect.triggered.connect(self.add_rect)
             insert_menu.addAction(act_add_rect)
 
         if hasattr(self, "add_circle"):
             act_add_circle = QtGui.QAction("Circle", self)
             act_add_circle.setShortcut("Ctrl+Shift+C")
+            act_add_circle.setToolTip("Insert circle (Ctrl+Shift+C)\nAdd circular shape")  # ← Patch 10
             act_add_circle.triggered.connect(self.add_circle)
             insert_menu.addAction(act_add_circle)
 
         if hasattr(self, "add_star"):
             act_add_star = QtGui.QAction("Star", self)
             act_add_star.setShortcut("Ctrl+Shift+S")
+            act_add_star.setToolTip("Insert star (Ctrl+Shift+S)\nAdd star shape")  # ← Patch 10
             act_add_star.triggered.connect(self.add_star)
             insert_menu.addAction(act_add_star)
 
         if hasattr(self, "add_arrow"):
             act_add_arrow = QtGui.QAction("Arrow", self)
             act_add_arrow.setShortcut("Ctrl+Shift+A")
+            act_add_arrow.setToolTip("Insert arrow (Ctrl+Shift+A)\nAdd directional arrow")  # ← Patch 10
             act_add_arrow.triggered.connect(self.add_arrow)
             insert_menu.addAction(act_add_arrow)
 
         if hasattr(self, "add_diamond"):
             act_add_diamond = QtGui.QAction("Diamond", self)
             act_add_diamond.setShortcut("Ctrl+Shift+D")
+            act_add_diamond.setToolTip("Insert diamond (Ctrl+Shift+D)\nAdd diamond shape")  # ← Patch 10
             act_add_diamond.triggered.connect(self.add_diamond)
             insert_menu.addAction(act_add_diamond)
 
@@ -602,28 +681,33 @@ class MainWindow(QtWidgets.QMainWindow):
         layout_menu = menubar.addMenu("&Layout")
 
         act_cols = QtGui.QAction("Set Column Guides…", self)
+        act_cols.setToolTip("Create vertical column guides for alignment")  # ← Patch 10
         act_cols.triggered.connect(self._set_column_guides_dialog)
         layout_menu.addAction(act_cols)
 
         act_cols_clear = QtGui.QAction("Clear Column Guides", self)
+        act_cols_clear.setToolTip("Remove all column guides")  # ← Patch 10
         act_cols_clear.triggered.connect(self._clear_column_guides)
         layout_menu.addAction(act_cols_clear)
 
         layout_menu.addSeparator()
 
         act_baseline_menu = QtGui.QAction("Apply Baseline to Selection", self)
+        act_baseline_menu.setToolTip("Snap selected items to baseline grid")  # ← Patch 10
         act_baseline_menu.triggered.connect(self._apply_baseline_to_selected)
         layout_menu.addAction(act_baseline_menu)
 
         presets_menu = layout_menu.addMenu("Presets")
 
         act_preset_simple = QtGui.QAction("Simple Store Receipt", self)
+        act_preset_simple.setToolTip("Load basic retail receipt template")  # ← Patch 10
         act_preset_simple.triggered.connect(
             lambda: self._apply_preset("simple_store_receipt")
         )
         presets_menu.addAction(act_preset_simple)
 
         act_preset_kitchen = QtGui.QAction("Kitchen Ticket", self)
+        act_preset_kitchen.setToolTip("Load restaurant kitchen order template")  # ← Patch 10
         act_preset_kitchen.triggered.connect(
             lambda: self._apply_preset("kitchen_ticket")
         )
@@ -632,36 +716,39 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- New presets ---
 
         act_preset_detailed = QtGui.QAction("Detailed Store Receipt", self)
+        act_preset_detailed.setToolTip("Load detailed retail receipt with itemization")  # ← Patch 10
         act_preset_detailed.triggered.connect(
             lambda: self._apply_preset("detailed_store_receipt")
         )
         presets_menu.addAction(act_preset_detailed)
 
         act_preset_pickup = QtGui.QAction("Pickup Ticket", self)
+        act_preset_pickup.setToolTip("Load order pickup ticket template")  # ← Patch 10
         act_preset_pickup.triggered.connect(
             lambda: self._apply_preset("pickup_ticket")
         )
         presets_menu.addAction(act_preset_pickup)
 
         act_preset_todo = QtGui.QAction("To-Do / Checklist", self)
+        act_preset_todo.setToolTip("Load checklist template")  # ← Patch 10
         act_preset_todo.triggered.connect(
             lambda: self._apply_preset("todo_checklist")
         )
         presets_menu.addAction(act_preset_todo)
 
         act_preset_message = QtGui.QAction("Message Note", self)
+        act_preset_message.setToolTip("Load message note template")  # ← Patch 10
         act_preset_message.triggered.connect(
             lambda: self._apply_preset("message_note")
         )
         presets_menu.addAction(act_preset_message)
 
         act_preset_fortune = QtGui.QAction("Fortune Cookie", self)
+        act_preset_fortune.setToolTip("Load fortune cookie slip template")  # ← Patch 10
         act_preset_fortune.triggered.connect(
             lambda: self._apply_preset("fortune_cookie")
         )
         presets_menu.addAction(act_preset_fortune)
-
-
 
         # =============================
         # Help menu
@@ -669,6 +756,7 @@ class MainWindow(QtWidgets.QMainWindow):
         help_menu = menubar.addMenu("&Help")
 
         act_shortcuts = QtGui.QAction("Keyboard Shortcuts…", self)
+        act_shortcuts.setToolTip("View all keyboard shortcuts")  # ← Patch 10
         act_shortcuts.triggered.connect(self._show_keyboard_shortcuts_dialog)
         help_menu.addAction(act_shortcuts)
 
@@ -962,7 +1050,7 @@ class MainWindow(QtWidgets.QMainWindow):
         Stores absolute image path in elem.image_path and uses elem.text
         as a friendly label (basename).
         """
-        # Pick file
+        # ========== Patch 9: File selection ==========
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select image",
@@ -972,45 +1060,116 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
 
-        path = os.path.abspath(path)
-
-        # default geometry in px
-        w_mm = 25.0
-        h_mm = 15.0
+        # ========== Patch 9: File validation with error handling ==========
         try:
-            factor = float(PX_PER_MM) if PX_PER_MM else 1.0
-        except Exception:
-            factor = 1.0
+            path = os.path.abspath(path)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Path",
+                f"Could not resolve image path:\n\n{e}"
+            )
+            return
+        
+        # Verify file exists and is readable
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "File Not Found",
+                f"The image file could not be found:\n{path}"
+            )
+            return
+        
+        if not os.path.isfile(path):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid File",
+                f"The selected path is not a file:\n{path}"
+            )
+            return
+        
+        # Try to load the image to verify it's valid
+        try:
+            test_img = QtGui.QImage(path)
+            if test_img.isNull():
+                raise ValueError("Image failed to load - file may be corrupted or unsupported format")
+        except FileNotFoundError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "File Not Found",
+                f"The image file could not be found:\n{path}"
+            )
+            return
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to read this file:\n{path}"
+            )
+            return
+        except ValueError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Image",
+                f"Could not load image:\n{path}\n\n{e}"
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Image Load Error",
+                f"An error occurred while loading the image:\n{path}\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
 
-        w_px = w_mm * factor
-        h_px = h_mm * factor
-        x_px = 5.0 * factor
-        y_px = 5.0 * factor
+        # ========== Patch 9: Element creation with error handling ==========
+        try:
+            # default geometry in px
+            w_mm = 25.0
+            h_mm = 15.0
+            try:
+                factor = float(PX_PER_MM) if PX_PER_MM else 1.0
+            except Exception:
+                factor = 1.0
 
-        elem = Element(
-            kind="image",
-            text=os.path.basename(path),  # nice label for Layers/Props
-            x=float(x_px),
-            y=float(y_px),
-            w=float(w_px),
-            h=float(h_px),
-        )
-        elem.image_path = path
+            w_px = w_mm * factor
+            h_px = h_mm * factor
+            x_px = 5.0 * factor
+            y_px = 5.0 * factor
 
-        item = GItem(elem)
-        item.undo_stack = self.undo_stack
-        item.setPos(x_px, y_px)
+            elem = Element(
+                kind="image",
+                text=os.path.basename(path),  # nice label for Layers/Props
+                x=float(x_px),
+                y=float(y_px),
+                w=float(w_px),
+                h=float(h_px),
+            )
+            elem.image_path = path
 
-        self.scene.addItem(item)
-        self.template.elements.append(elem)
+            item = GItem(elem)
+            item.undo_stack = self.undo_stack
+            item.setPos(x_px, y_px)
 
-        # select it
-        self.scene.clearSelection()
-        item.setSelected(True)
+            self.scene.addItem(item)
+            self.template.elements.append(elem)
 
-        # keep UI in sync
-        self._refresh_layers_safe()
-        self._on_selection_changed()
+            # select it
+            self.scene.clearSelection()
+            item.setSelected(True)
+
+            # keep UI in sync
+            self._refresh_layers_safe()
+            self._on_selection_changed()
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Image Creation Error",
+                f"Could not create image element:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
 
 
     def _default_inset_xy(self, w_px: float = 160.0, h_px: float = 40.0) -> tuple[float, float]:
@@ -1078,11 +1237,22 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Render the current scene to a QImage and send it to the printer worker.
         """
-        img = scene_to_image(self.scene, scale=1.0)
+        # ========== Patch 9: Render with error handling ==========
+        try:
+            img = scene_to_image(self.scene, scale=1.0)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Render Error",
+                f"Could not render the scene to an image:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            print(f"[PRINT DEBUG] Render exception: {e}")
+            return
 
         if img is None or img.isNull():
             QtWidgets.QMessageBox.warning(
-                self, "Print error", "Could not render the scene to an image."
+                self, "Print Error", "Could not render the scene to an image."
             )
             print("[PRINT DEBUG] scene_to_image returned null image")
             return
@@ -1094,53 +1264,127 @@ class MainWindow(QtWidgets.QMainWindow):
             img.height(),
         )
 
-        worker = PrinterWorker(
-            action="print",
-            payload={
-                "image": img,
-                "config": self.printer_cfg,
-            },
-        )
-        self._workers.add(worker)
+        # ========== Patch 9: Printer worker with error handling ==========
+        try:
+            worker = PrinterWorker(
+                action="print",
+                payload={
+                    "image": img,
+                    "config": self.printer_cfg,
+                },
+            )
+            self._workers.add(worker)
 
-        def _on_finished():
-            self.statusBar().showMessage("Print job finished", 3000)
-            try:
-                self._workers.discard(worker)
-            except Exception:
-                pass
+            def _on_finished():
+                self.statusBar().showMessage("Print job finished", 3000)
+                try:
+                    self._workers.discard(worker)
+                except Exception:
+                    pass
 
-        def _on_error(err: str):
-            print("[PRINT ERROR]", err)
-            self.statusBar().showMessage(f"Print error: {err}", 5000)
-            QtWidgets.QMessageBox.warning(self, "Print error", err)
+            def _on_error(err: str):
+                print("[PRINT ERROR]", err)
+                self.statusBar().showMessage(f"Print error: {err}", 5000)
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Print Error",
+                    f"The printer reported an error:\n\n{err}\n\n"
+                    "Please check:\n"
+                    "• Printer is powered on and connected\n"
+                    "• Printer has paper loaded\n"
+                    "• No paper jams or other issues"
+                )
 
-        worker.signals.finished.connect(_on_finished)
-        worker.signals.error.connect(_on_error)
-        worker.start()
+            worker.signals.finished.connect(_on_finished)
+            worker.signals.error.connect(_on_error)
+            worker.start()
+            
+        except ConnectionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Printer Connection Error",
+                "Could not connect to the printer. Please check:\n\n"
+                "• Printer is powered on\n"
+                "• USB/Network cable is connected\n"
+                "• Printer drivers are installed\n"
+                "• No other application is using the printer"
+            )
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Printer Permission Error",
+                "You don't have permission to access the printer.\n\n"
+                "Try running the application as administrator or check printer permissions."
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Print Error",
+                f"An error occurred while starting the print job:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
 
     def export_png(self):
         """
         Render the current scene to a PNG image file.
         """
-        img = scene_to_image(self.scene, scale=1.0)
-
-        if img is None or img.isNull():
-            QtWidgets.QMessageBox.warning(
-                self, "Export error", "Could not render the scene to an image."
+        # ========== Patch 9: Render with error handling ==========
+        try:
+            img = scene_to_image(self.scene, scale=1.0)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Render Error",
+                f"Could not render the scene to an image:\n\n"
+                f"Error: {type(e).__name__}: {e}"
             )
             return
 
+        if img is None or img.isNull():
+            QtWidgets.QMessageBox.warning(
+                self, "Export Error", "Could not render the scene to an image."
+            )
+            return
+
+        # ========== Patch 9: File dialog ==========
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Export as PNG", "", "PNG Images (*.png)"
         )
         if not path:
             return
 
-        ok = img.save(path, "PNG")
-        if not ok:
-            QtWidgets.QMessageBox.warning(
-                self, "Export error", "Failed to save PNG image."
+        # Ensure .png extension
+        if not path.lower().endswith('.png'):
+            path += '.png'
+
+        # ========== Patch 9: Save with error handling ==========
+        try:
+            ok = img.save(path, "PNG")
+            if not ok:
+                raise IOError("QImage.save() returned False - save operation failed")
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to write to:\n{path}\n\n"
+                "Try saving to a different location."
+            )
+            return
+        except OSError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Could not save PNG file:\n{path}\n\n"
+                f"Error: {e}\n\n"
+                "Check that you have enough disk space."
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Unexpected Error",
+                f"An unexpected error occurred during export:\n\n"
+                f"Error: {type(e).__name__}: {e}"
             )
             return
 
@@ -1150,49 +1394,93 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Render the current scene to a single-page PDF file.
         """
-        img = scene_to_image(self.scene, scale=1.0)
-
-        if img is None or img.isNull():
-            QtWidgets.QMessageBox.warning(
-                self, "Export error", "Could not render the scene to an image."
+        # ========== Patch 9: Render with error handling ==========
+        try:
+            img = scene_to_image(self.scene, scale=1.0)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Render Error",
+                f"Could not render the scene to an image:\n\n"
+                f"Error: {type(e).__name__}: {e}"
             )
             return
 
+        if img is None or img.isNull():
+            QtWidgets.QMessageBox.warning(
+                self, "Export Error", "Could not render the scene to an image."
+            )
+            return
+
+        # ========== Patch 9: File dialog ==========
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Export as PDF", "", "PDF Files (*.pdf)"
         )
         if not path:
             return
 
-        writer = QtGui.QPdfWriter(path)
-        try:
-            writer.setResolution(self.template.dpi)
-            writer.setPageSizeMM(
-                QtCore.QSizeF(self.template.width_mm, self.template.height_mm)
-            )
-        except Exception:
-            # If template is missing for some reason, just let Qt pick defaults
-            pass
+        # Ensure .pdf extension
+        if not path.lower().endswith('.pdf'):
+            path += '.pdf'
 
-        painter = QtGui.QPainter(writer)
-        if not painter.isActive():
-            QtWidgets.QMessageBox.warning(
-                self, "Export error", "Could not open PDF for writing."
+        # ========== Patch 9: PDF creation with error handling ==========
+        try:
+            writer = QtGui.QPdfWriter(path)
+            try:
+                writer.setResolution(self.template.dpi)
+                writer.setPageSizeMM(
+                    QtCore.QSizeF(self.template.width_mm, self.template.height_mm)
+                )
+            except AttributeError:
+                # If template is missing attributes, use defaults
+                writer.setResolution(203)
+                writer.setPageSizeMM(QtCore.QSizeF(80, 200))
+            except Exception as e:
+                print(f"Warning: Could not set PDF page size: {e}")
+                # Continue with Qt defaults
+
+            painter = QtGui.QPainter(writer)
+            if not painter.isActive():
+                raise IOError("Could not begin painting to PDF - file may be locked or path invalid")
+
+            page_rect = painter.viewport()
+            img_size = img.size()
+            img_size.scale(page_rect.size(), QtCore.Qt.KeepAspectRatio)
+            painter.setViewport(
+                page_rect.x(),
+                page_rect.y(),
+                img_size.width(),
+                img_size.height(),
+            )
+            painter.setWindow(img.rect())
+            painter.drawImage(0, 0, img)
+            painter.end()
+
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to write to:\n{path}\n\n"
+                "Try saving to a different location."
             )
             return
-
-        page_rect = painter.viewport()
-        img_size = img.size()
-        img_size.scale(page_rect.size(), QtCore.Qt.KeepAspectRatio)
-        painter.setViewport(
-            page_rect.x(),
-            page_rect.y(),
-            img_size.width(),
-            img_size.height(),
-        )
-        painter.setWindow(img.rect())
-        painter.drawImage(0, 0, img)
-        painter.end()
+        except OSError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "PDF Export Error",
+                f"Could not create PDF file:\n{path}\n\n"
+                f"Error: {e}\n\n"
+                "Check that you have enough disk space and the path is valid."
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Unexpected Error",
+                f"An error occurred during PDF export:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
 
         self.statusBar().showMessage(f"Exported PDF: {path}", 3000)
 
@@ -1226,60 +1514,195 @@ class MainWindow(QtWidgets.QMainWindow):
     # Persistence (Template + Printer)
     # -------------------------
     def save_template(self):
+        """Save template to file with improved error handling"""
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Template", "", "Template JSON (*.json)"
         )
         if not path:
             return
-        elements = []
-        for it in self.scene.items():
-            if isinstance(it, GItem):
-                elements.append(it.elem.to_dict())
-        t = Template(
-            width_mm=self.template.width_mm,
-            height_mm=self.template.height_mm,
-            dpi=self.template.dpi,
-            margins_mm=self.template.margins_mm,
-            elements=[Element.from_dict(e) for e in elements],
-            guides=self.template.guides,
-            grid=self.template.grid,
-            name=self.template.name,
-            version=self.template.version,
-        )
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(t.to_dict(), f, indent=2)
+        
+        # Ensure .json extension
+        if not path.lower().endswith('.json'):
+            path += '.json'
+        
+        # ========== Patch 9: Collect elements with error handling ==========
+        try:
+            elements = []
+            for it in self.scene.items():
+                if isinstance(it, GItem):
+                    elements.append(it.elem.to_dict())
+            
+            t = Template(
+                width_mm=self.template.width_mm,
+                height_mm=self.template.height_mm,
+                dpi=self.template.dpi,
+                margins_mm=self.template.margins_mm,
+                elements=[Element.from_dict(e) for e in elements],
+                guides=self.template.guides,
+                grid=self.template.grid,
+                name=self.template.name,
+                version=self.template.version,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Serialization Error",
+                f"Could not convert template to JSON format:\n\n"
+                f"Error: {type(e).__name__}: {e}\n\n"
+                "One or more elements may have invalid data."
+            )
+            return
+        
+        # ========== Patch 9: Write file with error handling ==========
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(t.to_dict(), f, indent=2)
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to write to:\n{path}\n\n"
+                "Try saving to a different location or check folder permissions."
+            )
+            return
+        except OSError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Save Error",
+                f"Could not save file:\n{path}\n\n"
+                f"Error: {e}\n\n"
+                "Check that you have enough disk space and the path is valid."
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Unexpected Error",
+                f"An unexpected error occurred while saving:\n{path}\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
+        
+        # Success - update state
         self.statusBar().showMessage(f"Saved: {path}", 3000)
         self._update_recent_files(path)
         self._current_file_path = path
         self._has_unsaved_changes = False
 
     def load_template(self):
+        """Load template from file with improved error handling"""
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Load Template", "", "Template JSON (*.json)"
         )
         if not path:
             return
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.template = Template.from_dict(data)
-
-        self.scene.clear()
-        for e in self.template.elements:
-            item = GItem(e)
-            item.undo_stack = self.undo_stack
-            self.scene.addItem(item)
-            item.setPos(e.x, e.y)
-
-        self.update_paper()
-        self._refresh_layers_safe()
         
-        # Patch 3 additions:
-        self._current_file_path = path
-        self._add_to_recent_files(path)
-        self._has_unsaved_changes = False
-        self.undo_stack.clear()
+        # ========== Patch 9: File reading with error handling ==========
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "File Not Found",
+                f"The file could not be found:\n{path}"
+            )
+            # Remove from recent files if it was there
+            recent = self.settings.value("recent_files", []) or []
+            if path in recent:
+                recent.remove(path)
+                self.settings.setValue("recent_files", recent)
+                self._refresh_recent_menu()
+            return
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to read this file:\n{path}\n\n"
+                "Try closing other programs that might be using it."
+            )
+            return
+        except json.JSONDecodeError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template File",
+                f"The file is not a valid JSON template:\n{path}\n\n"
+                f"Error at line {e.lineno}, column {e.colno}:\n{e.msg}"
+            )
+            return
+        except UnicodeDecodeError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid File Encoding",
+                f"The file encoding is not supported:\n{path}\n\n"
+                "Template files must be saved as UTF-8."
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Load Error",
+                f"An unexpected error occurred while loading:\n{path}\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
         
-        self.statusBar().showMessage(f"Loaded: {path}", 3000)
+        # ========== Patch 9: Template parsing with error handling ==========
+        try:
+            self.template = Template.from_dict(data)
+        except KeyError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template Data",
+                f"The template file is missing required field:\n{e}\n\n"
+                "This file may be corrupted or from an incompatible version."
+            )
+            return
+        except (ValueError, TypeError) as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template Data",
+                f"The template file contains invalid data:\n\n{e}"
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Template Parse Error",
+                f"Could not parse template data:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
+        
+        # ========== Patch 9: Scene building with error handling ==========
+        try:
+            self.scene.clear()
+            for e in self.template.elements:
+                item = GItem(e)
+                item.undo_stack = self.undo_stack
+                self.scene.addItem(item)
+                item.setPos(e.x, e.y)
+
+            self.update_paper()
+            self._refresh_layers_safe()
+            
+            # Patch 3 additions:
+            self._current_file_path = path
+            self._add_to_recent_files(path)
+            self._has_unsaved_changes = False
+            self.undo_stack.clear()
+            self._clear_column_guides()
+            
+            self.statusBar().showMessage(f"Loaded: {path}", 3000)
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Scene Build Error",
+                f"Error building scene from template:\n\n"
+                f"Error: {type(e).__name__}: {e}\n\n"
+                "The template may be partially loaded."
+            )
 
     def _mark_unsaved(self):
         """Mark that changes have been made (called when scene changes)"""
@@ -1287,6 +1710,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _auto_save(self):
         """Auto-save current template to temp location every 60 seconds"""
+        if not self._has_unsaved_changes:
+            return  # Nothing has changed since last save
+        
         if not self.scene.items():
             return  # Nothing to save
         
@@ -1294,10 +1720,12 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QStandardPaths.TempLocation
         )
         if not temp_dir:
+            print("Auto-save failed: No writable temp directory available")
             return
         
         autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
         
+        # ========== Patch 9: Serialization with specific error handling ==========
         try:
             # Collect elements from scene
             elements = []
@@ -1317,18 +1745,28 @@ class MainWindow(QtWidgets.QMainWindow):
                 name=self.template.name,
                 version=self.template.version,
             )
-            
-            # Save to temp file
+        except (KeyError, ValueError, TypeError, AttributeError) as e:
+            # Don't show dialog for auto-save serialization failures, just log
+            print(f"Auto-save serialization failed: {type(e).__name__}: {e}")
+            return
+        except Exception as e:
+            print(f"Auto-save unexpected serialization error: {type(e).__name__}: {e}")
+            return
+        
+        # ========== Patch 9: File writing with specific error handling ==========
+        try:
             with open(autosave_path, "w", encoding="utf-8") as f:
                 json.dump(t.to_dict(), f, indent=2)
             
-            # Brief status update
-            if self._has_unsaved_changes:
-                self.statusBar().showMessage("Auto-saved", 2000)
-                
+            # Brief status update on success
+            self.statusBar().showMessage("Auto-saved", 2000)
+            
+        except PermissionError:
+            print(f"Auto-save permission denied: {autosave_path}")
+        except OSError as e:
+            print(f"Auto-save I/O error: {e}")
         except Exception as e:
-            # Don't crash on auto-save failure
-            print(f"Auto-save failed: {e}")
+            print(f"Auto-save unexpected write error: {type(e).__name__}: {e}")
 
     def _load_crash_recovery(self):
         """Check for auto-saved file on startup and offer to restore"""
@@ -1438,27 +1876,91 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_recent_menu()
 
     def _load_template_path(self, path: str):
-        """Load template from a specific file path"""
+        """Load template from a specific file path with improved error handling"""
+        # ========== Patch 9: Validate file exists ==========
         if not os.path.exists(path):
-            QtWidgets.QMessageBox.warning(
+            reply = QtWidgets.QMessageBox.question(
                 self,
                 "File Not Found",
-                f"Template file not found:\n{path}"
+                f"The file no longer exists:\n{path}\n\n"
+                "Remove it from recent files?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
             )
-            # Remove from recent files
-            recent = self.settings.value("recent_files", [], type=list)
-            if path in recent:
-                recent.remove(path)
-                self.settings.setValue("recent_files", recent)
-                self._refresh_recent_menu()
+            
+            if reply == QtWidgets.QMessageBox.Yes:
+                recent = self.settings.value("recent_files", [], type=list)
+                if path in recent:
+                    recent.remove(path)
+                    self.settings.setValue("recent_files", recent)
+                    self._refresh_recent_menu()
             return
         
+        # ========== Patch 9: Load file with specific error handling ==========
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            
+        except PermissionError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Permission Denied",
+                f"You don't have permission to read this file:\n{path}\n\n"
+                "Try closing other programs that might be using it."
+            )
+            return
+        except json.JSONDecodeError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template File",
+                f"The file is not a valid JSON template:\n{path}\n\n"
+                f"Error at line {e.lineno}, column {e.colno}:\n{e.msg}"
+            )
+            return
+        except UnicodeDecodeError:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid File Encoding",
+                f"The file encoding is not supported:\n{path}\n\n"
+                "Template files must be saved as UTF-8."
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Load Error",
+                f"An unexpected error occurred while loading:\n{path}\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
+        
+        # ========== Patch 9: Parse template with specific error handling ==========
+        try:
             self.template = Template.from_dict(data)
-            
+        except KeyError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template Data",
+                f"The template file is missing required field:\n{e}\n\n"
+                "This file may be corrupted or from an incompatible version."
+            )
+            return
+        except (ValueError, TypeError) as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Template Data",
+                f"The template file contains invalid data:\n\n{e}"
+            )
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Template Parse Error",
+                f"Could not parse template data:\n\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
+            return
+        
+        # ========== Patch 9: Build scene with error handling ==========
+        try:
             self.scene.clear()
             for e in self.template.elements:
                 item = GItem(e)
@@ -1470,21 +1972,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_layers_safe()
             
             self._current_file_path = path
+            self._update_recent_files(path)  # Move to top of recent list
             self._has_unsaved_changes = False
+            self.undo_stack.clear()
+            self._clear_column_guides()
             
             self.statusBar().showMessage(f"Loaded: {os.path.basename(path)}", 3000)
             
         except Exception as e:
-            QtWidgets.QMessageBox.warning(
+            QtWidgets.QMessageBox.critical(
                 self,
-                "Load Error",
-                f"Could not load template:\n{e}"
+                "Scene Build Error",
+                f"Error building scene from template:\n\n"
+                f"Error: {type(e).__name__}: {e}\n\n"
+                "The template may be partially loaded."
             )
 
     def _clear_recent_files(self):
-        """Clear the recent files list"""
-        self.settings.setValue("recent_files", [])
-        self._refresh_recent_menu()
+        """Clear the recent files list with confirmation"""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear Recent Files",
+            "Are you sure you want to clear the recent files list?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.settings.setValue("recent_files", [])
+            self._refresh_recent_menu()
+            self.statusBar().showMessage("Recent files cleared", 2000)
 
     def preview_print(self):
         """Show print preview dialog before printing"""
@@ -1502,6 +2018,96 @@ class MainWindow(QtWidgets.QMainWindow):
         if dlg.exec() == QtWidgets.QDialog.Accepted:
             # User clicked "Print" in the preview dialog
             self.print_now()
+
+    def _show_alignment_guides(self, moving_item: GItem):
+        """Show alignment guides when item aligns with others"""
+        self._clear_alignment_guides()
+        
+        if not moving_item:
+            return
+        
+        ALIGN_THRESHOLD = 3.0  # pixels
+        moving_rect = moving_item.sceneBoundingRect()
+        
+        # Get all other items (excluding guides, grid, and the moving item)
+        other_items = [
+            item for item in self.scene.items()
+            if isinstance(item, GItem) and item != moving_item
+            and not isinstance(item, (GuideLineItem, GuideGridItem))
+        ]
+        
+        if not other_items:
+            return
+        
+        # Check for alignment on each edge and center
+        moving_left = moving_rect.left()
+        moving_right = moving_rect.right()
+        moving_hcenter = moving_rect.center().x()
+        moving_top = moving_rect.top()
+        moving_bottom = moving_rect.bottom()
+        moving_vcenter = moving_rect.center().y()
+        
+        scene_height = self.template.height_mm * PX_PER_MM
+        scene_width = self.template.width_mm * PX_PER_MM
+        
+        for other in other_items:
+            other_rect = other.sceneBoundingRect()
+            
+            # Horizontal alignment checks
+            # Left edges align
+            if abs(moving_left - other_rect.left()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    moving_left, 0, moving_left, scene_height,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+            
+            # Right edges align
+            if abs(moving_right - other_rect.right()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    moving_right, 0, moving_right, scene_height,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+            
+            # Horizontal centers align
+            if abs(moving_hcenter - other_rect.center().x()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    moving_hcenter, 0, moving_hcenter, scene_height,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+            
+            # Vertical alignment checks
+            # Top edges align
+            if abs(moving_top - other_rect.top()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    0, moving_top, scene_width, moving_top,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+            
+            # Bottom edges align
+            if abs(moving_bottom - other_rect.bottom()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    0, moving_bottom, scene_width, moving_bottom,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+            
+            # Vertical centers align
+            if abs(moving_vcenter - other_rect.center().y()) < ALIGN_THRESHOLD:
+                line = self.scene.addLine(
+                    0, moving_vcenter, scene_width, moving_vcenter,
+                    self._alignment_guide_pen
+                )
+                self._alignment_guides.append(line)
+
+    def _clear_alignment_guides(self):
+        """Remove all alignment guides"""
+        for guide in self._alignment_guides:
+            self.scene.removeItem(guide)
+        self._alignment_guides.clear()
 
     # -------------------------
     # Fortune helper
@@ -1918,6 +2524,24 @@ class MainWindow(QtWidgets.QMainWindow):
     # Keyboard handling via eventFilter
     # -------------------------
     def eventFilter(self, obj, event):
+        # ========== NEW: Patch 7 - Live Alignment Guides ==========
+        # Handle mouse events for alignment guide display
+        if obj in (self.view, self.view.viewport()):
+            # Mouse move during drag - show alignment guides
+            if event.type() == QtCore.QEvent.MouseMove:
+                # Check if we're dragging items
+                if event.buttons() & QtCore.Qt.LeftButton:
+                    items = self.scene.selectedItems()
+                    if len(items) == 1 and isinstance(items[0], GItem):
+                        self._show_alignment_guides(items[0])
+            
+            # Mouse release - clear alignment guides
+            elif event.type() == QtCore.QEvent.MouseButtonRelease:
+                if event.button() == QtCore.Qt.LeftButton:
+                    self._clear_alignment_guides()
+        # ========== END NEW ==========
+        
+        # Existing keyboard handling
         if (
             event.type() == QtCore.QEvent.KeyPress
             and obj in (self.view, self.view.viewport())
@@ -2000,6 +2624,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
 
     def _duplicate_selected_items(self):
+        """Duplicate selected items with remembered offset"""
         items = self.scene.selectedItems()
         if not items:
             return
@@ -2012,8 +2637,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     new_elem = Element.from_dict(e_dict)
                 except Exception:
                     continue
-                new_elem.x = float(getattr(it.elem, "x", 0.0)) + 5.0
-                new_elem.y = float(getattr(it.elem, "y", 0.0)) + 5.0
+                
+                # ========== Patch 10: Use remembered offset instead of fixed 5.0 ==========
+                new_elem.x = float(getattr(it.elem, "x", 0.0)) + self._last_duplicate_offset.x()
+                new_elem.y = float(getattr(it.elem, "y", 0.0)) + self._last_duplicate_offset.y()
+                # ========== END Patch 10 ==========
+                
                 new_item = GItem(new_elem)
                 self.scene.addItem(new_item)
                 new_item.setPos(new_elem.x, new_elem.y)
@@ -2024,6 +2653,14 @@ class MainWindow(QtWidgets.QMainWindow):
             for ni in new_items:
                 ni.setSelected(True)
             self._refresh_layers_safe()
+            
+            # ========== Patch 10: Show status message with offset ==========
+            self.statusBar().showMessage(
+                f"Duplicated {len(new_items)} item(s) at offset "
+                f"({self._last_duplicate_offset.x():.0f}, {self._last_duplicate_offset.y():.0f}) px",
+                3000
+            )
+            # ========== END Patch 10 ==========
 
     # -------------------------
     # Helpers & selection sync
@@ -2092,7 +2729,40 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_refresh_layers_safe"):
             self._refresh_layers_safe()
 
-
+    def _set_duplicate_offset_dialog(self):
+        """Allow user to customize duplicate offset"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Set Duplicate Offset")
+        layout = QtWidgets.QFormLayout(dialog)
+        
+        sb_x = QtWidgets.QDoubleSpinBox()
+        sb_x.setRange(-1000, 1000)
+        sb_x.setValue(self._last_duplicate_offset.x())
+        sb_x.setSuffix(" px")
+        sb_x.setDecimals(0)
+        
+        sb_y = QtWidgets.QDoubleSpinBox()
+        sb_y.setRange(-1000, 1000)
+        sb_y.setValue(self._last_duplicate_offset.y())
+        sb_y.setSuffix(" px")
+        sb_y.setDecimals(0)
+        
+        layout.addRow("Horizontal offset:", sb_x)
+        layout.addRow("Vertical offset:", sb_y)
+        
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
+            self._last_duplicate_offset = QtCore.QPointF(sb_x.value(), sb_y.value())
+            self.statusBar().showMessage(
+                f"Duplicate offset set to ({sb_x.value():.0f}, {sb_y.value():.0f}) px",
+                3000
+            )
 
     def _on_darkness_changed(self, val: int):
         self.printer_cfg["darkness"] = int(val)
@@ -2352,29 +3022,37 @@ class MainWindow(QtWidgets.QMainWindow):
                 it.setData(0, None)
 
     def _set_column_guides_dialog(self):
-        """
-        Prompt for X positions (mm) and create vertical column guides.
-        """
-        text, ok = QtWidgets.QInputDialog.getText(
-            self,
-            "Set Column Guides",
-            "Enter X positions in mm (comma-separated):",
+        """Show dialog to set column guides"""
+        num_cols, ok = QtWidgets.QInputDialog.getInt(
+            self, "Column Guides", "Number of columns:", 3, 1, 10
         )
-        if not ok or not text.strip():
+        if not ok:
             return
-
-        parts = [p.strip() for p in text.split(",") if p.strip()]
-        mm_values = []
-        for p in parts:
-            try:
-                mm_values.append(float(p))
-            except ValueError:
-                pass
-
-        if not mm_values:
-            return
-
-        self._set_column_guides(mm_values)
+        
+        self._clear_column_guides()
+        
+        # Calculate column positions based on printable area
+        printable_width = (
+            self.template.width_mm 
+            - self.template.margin_left_mm 
+            - self.template.margin_right_mm
+        )
+        col_width = printable_width / num_cols
+        start_x = self.template.margin_left_mm * PX_PER_MM
+        
+        guide_positions = []
+        
+        for i in range(num_cols + 1):  # n+1 guides for n columns
+            x = start_x + (i * col_width * PX_PER_MM)
+            guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+            self.scene.addItem(guide)
+            self._column_guides.append(guide)
+            guide_positions.append(x)
+        
+        # *** CRITICAL: Store positions in scene for itemChange() to access ***
+        self.scene.column_guide_positions = guide_positions
+        
+        self.statusBar().showMessage(f"Added {num_cols} column guides", 2000)
 
     def _set_column_guides(self, mm_values: list[float]):
         """
@@ -2499,11 +3177,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_layers_safe()
 
     def _clear_column_guides(self):
-        if not hasattr(self, "_column_guides"):
-            return
-        for g in self._column_guides:
-            self.scene.removeItem(g)
+        """Remove all column guides"""
+        for guide in self._column_guides:
+            self.scene.removeItem(guide)
         self._column_guides.clear()
+        
+        # *** CRITICAL: Clear positions from scene ***
+        self.scene.column_guide_positions = []
+        
+        self.statusBar().showMessage("Cleared column guides", 2000)
 
     def _apply_preset(self, name: str) -> None:
         """

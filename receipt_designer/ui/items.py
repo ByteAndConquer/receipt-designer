@@ -764,6 +764,7 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         - 0.5 mm grid
         - Page margins (inside edges)
         - Page center X/Y (aligns ITEM CENTER to page center)
+        - Column guides (NEW - Patch 6)
         """
         if change == QtWidgets.QGraphicsItem.ItemPositionChange and self.scene():
             if self.is_position_locked():
@@ -838,6 +839,25 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
                 right_target = right_margin_x - bw
                 if abs(orig_x - right_target) < tol_px:
                     x_candidates.append(right_target)
+
+            # ========== NEW: Column guide snapping (Patch 6) ==========
+            column_guide_positions = getattr(scene, 'column_guide_positions', [])
+            if column_guide_positions and bw > 0:
+                for guide_x in column_guide_positions:
+                    # Snap left edge to guide
+                    if abs(orig_x - guide_x) < tol_px:
+                        x_candidates.append(guide_x)
+                    
+                    # Snap right edge to guide
+                    right_edge = orig_x + bw
+                    if abs(right_edge - guide_x) < tol_px:
+                        x_candidates.append(guide_x - bw)
+                    
+                    # Snap center to guide
+                    item_center_x = orig_x + (bw / 2.0)
+                    if abs(item_center_x - guide_x) < tol_px:
+                        x_candidates.append(guide_x - (bw / 2.0))
+            # ========== END NEW ==========
 
             x = min(x_candidates, key=lambda c: abs(c - orig_x))
 
