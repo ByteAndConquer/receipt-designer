@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import List, Tuple, Optional, Any, Dict
+import re
 
 
 # ---------- Core element model ----------
@@ -98,6 +99,82 @@ class GuideGrid:
         return GuideGrid(**d)
 
 
+# ---------- Variable Manager ----------
+
+class VariableManager:
+    """
+    Manages user-defined template variables.
+    System variables (date, time) are still handled by GItem._resolve_text()
+    """
+    
+    def __init__(self):
+        self.variables: dict[str, str] = {}
+        self._init_default_variables()
+    
+    def _init_default_variables(self):
+        """Initialize some useful default variables"""
+        self.variables = {
+            "store_name": "My Store",
+            "store_address": "123 Main St",
+            "store_phone": "(555) 123-4456",
+            "receipt_footer": "Thank you for your business!",
+        }
+    
+    def set_variable(self, name: str, value: str):
+        """Set a variable value"""
+        self.variables[name] = value
+    
+    def get_variable(self, name: str) -> str:
+        """Get a variable value, or empty string if not found"""
+        return self.variables.get(name, "")
+    
+    def delete_variable(self, name: str) -> bool:
+        """Delete a variable. Returns True if deleted."""
+        if name in self.variables:
+            del self.variables[name]
+            return True
+        return False
+    
+    def get_all_variables(self) -> dict[str, str]:
+        """Get all variables"""
+        return self.variables.copy()
+    
+    def resolve_text(self, text: str) -> str:
+        """
+        Resolve user variables in text.
+        Format: {{var:variable_name}}
+        
+        Example:
+            text = "Welcome to {{var:store_name}}"
+            result = "Welcome to My Store"
+        """
+        if not text:
+            return text
+        
+        # Pattern for {{var:name}}
+        pattern = r'\{\{var:([a-zA-Z_][a-zA-Z0-9_]*)\}\}'
+        
+        def replace_var(match):
+            var_name = match.group(1)
+            return self.get_variable(var_name)
+        
+        return re.sub(pattern, replace_var, text)
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON"""
+        return {
+            "variables": self.variables.copy()
+        }
+    
+    @staticmethod
+    def from_dict(data: dict) -> "VariableManager":
+        """Load from dictionary - returns a NEW VariableManager instance"""
+        vm = VariableManager()
+        # Replace default variables with loaded ones
+        vm.variables = data.get("variables", {}).copy()
+        return vm
+
+
 # ---------- Template / document ----------
 
 @dataclass
@@ -116,6 +193,9 @@ class Template:
     # metadata
     name: str = "Untitled"
     version: str = "1.0"
+    
+    # variables
+    variable_manager: VariableManager = field(default_factory=VariableManager)
 
     # ---- convenience ----
     @property
@@ -141,13 +221,14 @@ class Template:
             "grid": self.grid.to_dict() if self.grid else None,
             "name": self.name,
             "version": self.version,
+            "variables": self.variable_manager.to_dict(),
         }
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Template":
         t = Template(
             width_mm=d.get("width_mm", 80.0),
-            height_mm=d.get("height_mm", .0),
+            height_mm=d.get("height_mm", 75.0),  # FIXED: was .0
             dpi=d.get("dpi", 203),
             margins_mm=tuple(d.get("margins_mm", (5.0, 5.0, 5.0, 5.0))),
             name=d.get("name", "Untitled"),
@@ -158,4 +239,9 @@ class Template:
         g = d.get("grid")
         if g:
             t.grid = GuideGrid.from_dict(g)
+        
+        # Load variables if present
+        if "variables" in d:
+            t.variable_manager = VariableManager.from_dict(d["variables"])
+        
         return t

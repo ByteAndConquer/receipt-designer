@@ -18,7 +18,6 @@ from .views import PX_PER_MM  # for px <-> mm conversions
 from ..core.barcodes import validate_barcode_data, BarcodeValidationError
 from ..core.commands import MoveResizeCmd, PropertyChangeCmd
 
-
 class PropertiesPanel(QtWidgets.QWidget):
     """
     Right-side properties panel.
@@ -485,11 +484,15 @@ class PropertiesPanel(QtWidgets.QWidget):
         Called by MainWindow when selection changes.
         """
 
-        # ========== NEW: Patch 8 - Commit pending text edits before switching items ==========
+        # ========== Patch 8: Commit pending edits before switching items ==========
         if self._text_undo_timer.isActive():
             self._text_undo_timer.stop()
             self._commit_text_to_undo()
-        # ========== END NEW ==========
+        
+        if self._font_size_undo_timer.isActive():
+            self._font_size_undo_timer.stop()
+            self._commit_font_size_to_undo()
+        # ========== END Patch 8 ==========
 
         self._updating_ui = True
         try:
@@ -1147,18 +1150,16 @@ class PropertiesPanel(QtWidgets.QWidget):
         if self._pending_text_item is None:
             return
         
-        # Get current value from the element
+        # Get current value
         if self._pending_text_item == self._current_item and self._current_elem:
             new_value = self._current_elem.text
         else:
-            # Item changed, get from pending item's element
             new_value = self._pending_text_item.elem.text if hasattr(self._pending_text_item, 'elem') else ""
         
         old_value = self._pending_text_old_value
         
         # Only create undo command if text actually changed
         if new_value != old_value:
-            # Use the existing _push_elem_property infrastructure
             elem = self._pending_text_item.elem if hasattr(self._pending_text_item, 'elem') else self._current_elem
             if elem:
                 cmd = PropertyChangeCmd(
@@ -1166,7 +1167,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                     "text",
                     old_value,
                     new_value,
-                    self._pending_text_item
+                    "Change text",           # ← 5th param: text (description)
+                    self._pending_text_item  # ← 6th param: item
                 )
                 if self._undo_stack:
                     self._undo_stack.push(cmd)
@@ -1174,6 +1176,38 @@ class PropertiesPanel(QtWidgets.QWidget):
         # Clear pending state
         self._pending_text_item = None
         self._pending_text_old_value = None
+
+    def _commit_font_size_to_undo(self):
+        """Commit font size change to undo stack"""
+        if self._pending_font_size_item is None:
+            return
+        
+        # Get current value
+        if self._pending_font_size_item == self._current_item and self._current_elem:
+            new_value = self._current_elem.font_point
+        else:
+            new_value = self._pending_font_size_item.elem.font_point if hasattr(self._pending_font_size_item, 'elem') else 12
+        
+        old_value = self._pending_font_size_old_value
+        
+        # Only create undo command if value actually changed
+        if new_value != old_value:
+            elem = self._pending_font_size_item.elem if hasattr(self._pending_font_size_item, 'elem') else self._current_elem
+            if elem:
+                cmd = PropertyChangeCmd(
+                    elem,
+                    "font_point",
+                    old_value,
+                    new_value,
+                    "Change font size",           # ← 5th param: text (description)
+                    self._pending_font_size_item  # ← 6th param: item
+                )
+                if self._undo_stack:
+                    self._undo_stack.push(cmd)
+        
+        # Clear pending state
+        self._pending_font_size_item = None
+        self._pending_font_size_old_value = None
 
     def _on_font_changed(self, qfont: QtGui.QFont):
         if self._updating_ui or self._mode != "text":
@@ -1187,17 +1221,37 @@ class PropertiesPanel(QtWidgets.QWidget):
         )
 
     def _on_font_size_changed(self, value: int):
+        """Buffer font size changes"""
         if self._updating_ui or self._mode != "text":
             return
         if self._current_elem is None:
             return
+        
         v = int(value)
-
+        
+        # ========== Patch 8: Buffer font size changes ==========
+        # First edit on this item - store original value
+        if self._pending_font_size_item != self._current_item:
+            if self._pending_font_size_item is not None:
+                self._commit_font_size_to_undo()
+            self._pending_font_size_item = self._current_item
+            self._pending_font_size_old_value = getattr(self._current_elem, "font_point", 12)
+        
+        # Update element immediately (live preview)
         # main one used by painter/cache/UI
-        self._push_elem_property("font_point", v, "Change font size")
-
-        # keep legacy font_size in sync without clogging undo with a second entry
+        self._current_elem.font_point = v
+        
+        # keep legacy font_size in sync without clogging undo
         setattr(self._current_elem, "font_size", v)
+        
+        # Update visual
+        if self._current_item:
+            self._current_item.update()
+        
+        # Restart timer - will commit to undo after 500ms of no changes
+        self._font_size_undo_timer.stop()
+        self._font_size_undo_timer.start()
+        # ========== END Patch 8 ==========
 
     def _on_bold_toggled(self, checked: bool):
         if self._updating_ui or self._mode != "text":

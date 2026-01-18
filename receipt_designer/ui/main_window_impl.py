@@ -26,6 +26,8 @@ from .layers import LayerList
 from .views import RulerView, PX_PER_MM
 from .toolbox import Toolbox
 from .properties import PropertiesPanel
+from .variables import VariablePanel
+
 
 # -------------------------
 # App constants / QSettings
@@ -163,6 +165,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_scene_view()
         self._build_toolbars_menus()
         self._build_docks()
+        self._update_view_menu()
         self.scene.column_guide_positions = []
 
         self.update_paper()
@@ -581,7 +584,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ========== Patch 10: Duplicate menu items ==========
         act_duplicate = QtGui.QAction("Duplicate", self)
-        act_duplicate.setShortcut("Ctrl+D")
         act_duplicate.setToolTip("Duplicate selected items (Ctrl+D)")
         act_duplicate.triggered.connect(self._duplicate_selected_items)
         edit_menu.addAction(act_duplicate)
@@ -593,6 +595,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # ========== END Patch 10 ==========
 
         # View
+        
         self.action_margins = QtGui.QAction("Show Printable Margins", self)
         self.action_margins.setCheckable(True)
         self.action_margins.setChecked(True)
@@ -605,6 +608,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.action_margins)
+        
+        # NOTE: Variables panel menu item will be added in _update_view_menu()
+        # which is called after _build_docks() completes
 
         # Insert
         insert_menu = menubar.addMenu("&Insert")
@@ -802,9 +808,29 @@ class MainWindow(QtWidgets.QMainWindow):
         dock_props.setWidget(props_scroll)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock_props)
 
-        # Share the right side
+        # RIGHT: Variables
+        self.variable_panel = VariablePanel(self)
+        self.dock_variables = QtWidgets.QDockWidget("Variables", self)  # ← Change to self.dock_variables
+        self.dock_variables.setObjectName("VariablesDock")
+        self.dock_variables.setWidget(self.variable_panel)
+        self.dock_variables.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetMovable |
+            QtWidgets.QDockWidget.DockWidgetFloatable
+        )
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.dock_variables)
+
+        # Tabify all right-side panels together
         self.tabifyDockWidget(dock_layers, dock_props)
+        self.tabifyDockWidget(dock_props, self.dock_variables)  # ← Use self.dock_variables
+        
+        
+        # Show Properties by default
         dock_props.raise_()
+        
+        # Connect variable changes to view updates
+        self.variable_panel.variables_changed.connect(
+            lambda: self.view.viewport().update()
+        )
 
         # Keep panels in sync
         self.scene.selectionChanged.connect(self._on_selection_changed)
@@ -812,6 +838,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.props.element_changed.connect(self._on_props_element_changed)
         # self.props.element_changed.connect(lambda *_: self._refresh_layers_safe())
 
+    def _update_view_menu(self):
+        """Add dock toggle actions to View menu (called after docks are built)"""
+        # Find the View menu
+        for action in self.menuBar().actions():
+            if action.text() == "&View":
+                view_menu = action.menu()
+                if view_menu:
+                    view_menu.addSeparator()
+                    
+                    # Add Variables panel toggle
+                    if hasattr(self, 'dock_variables'):
+                        act_variables = self.dock_variables.toggleViewAction()
+                        act_variables.setText("Variables Panel")
+                        view_menu.addAction(act_variables)
+                break
 
     # -------------------------
     # Theme & paper
@@ -913,6 +954,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         cmd = AddItemCmd(self.scene, item, text="Add text")
         self.undo_stack.push(cmd)
+        item._main_window = self
 
         item.setPos(e.x, e.y)
         item.setSelected(True)
@@ -1150,6 +1192,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             item = GItem(elem)
             item.undo_stack = self.undo_stack
+            item._main_window = self
             item.setPos(x_px, y_px)
 
             self.scene.addItem(item)
@@ -1225,6 +1268,8 @@ class MainWindow(QtWidgets.QMainWindow):
         e.bc_type = "Code128"  # renderer hint
 
         item = GItem(e)
+        item.undo_stack = self.undo_stack  # ← ADD THIS TOO
+        item._main_window = self  # ← ADD THIS
         self.scene.addItem(item)
         item.setPos(e.x, e.y)
         item.setSelected(True)
@@ -1680,6 +1725,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for e in self.template.elements:
                 item = GItem(e)
                 item.undo_stack = self.undo_stack
+                item._main_window = self 
                 self.scene.addItem(item)
                 item.setPos(e.x, e.y)
 
@@ -1802,6 +1848,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 for e in self.template.elements:
                     item = GItem(e)
                     item.undo_stack = self.undo_stack
+                    item._main_window = self
                     self.scene.addItem(item)
                     item.setPos(e.x, e.y)
                 
@@ -1965,6 +2012,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for e in self.template.elements:
                 item = GItem(e)
                 item.undo_stack = self.undo_stack
+                item._main_window = self
                 self.scene.addItem(item)
                 item.setPos(e.x, e.y)
             
@@ -2644,6 +2692,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 # ========== END Patch 10 ==========
                 
                 new_item = GItem(new_elem)
+                new_item.undo_stack = self.undo_stack  # ← ADD THIS TOO
+                new_item._main_window = self  # ← ADD THIS
                 self.scene.addItem(new_item)
                 new_item.setPos(new_elem.x, new_elem.y)
                 new_items.append(new_item)
@@ -3022,37 +3072,152 @@ class MainWindow(QtWidgets.QMainWindow):
                 it.setData(0, None)
 
     def _set_column_guides_dialog(self):
-        """Show dialog to set column guides"""
-        num_cols, ok = QtWidgets.QInputDialog.getInt(
-            self, "Column Guides", "Number of columns:", 3, 1, 10
+        """Show dialog to set column guides with width options"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Set Column Guides")
+        layout = QtWidgets.QFormLayout(dialog)
+        
+        # Number of columns
+        sb_cols = QtWidgets.QSpinBox()
+        sb_cols.setRange(1, 10)
+        sb_cols.setValue(3)
+        layout.addRow("Number of columns:", sb_cols)
+        
+        # Column width mode
+        combo_mode = QtWidgets.QComboBox()
+        combo_mode.addItems(["Equal width", "Custom width"])
+        layout.addRow("Column mode:", combo_mode)
+        
+        # Custom width input (hidden by default)
+        sb_width = QtWidgets.QDoubleSpinBox()
+        sb_width.setRange(5.0, 200.0)
+        sb_width.setValue(20.0)
+        sb_width.setSuffix(" mm")
+        sb_width.setDecimals(1)
+        lbl_width = QtWidgets.QLabel("Column width:")
+        layout.addRow(lbl_width, sb_width)
+        lbl_width.setVisible(False)
+        sb_width.setVisible(False)
+        
+        # Show/hide custom width based on mode
+        def on_mode_changed(mode):
+            is_custom = (mode == "Custom width")
+            lbl_width.setVisible(is_custom)
+            sb_width.setVisible(is_custom)
+        
+        combo_mode.currentTextChanged.connect(on_mode_changed)
+        
+        # Buttons
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
-        if not ok:
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
             return
+        
+        # Get values
+        num_cols = sb_cols.value()
+        mode = combo_mode.currentText()
+        custom_width_mm = sb_width.value()
         
         self._clear_column_guides()
         
-        # Calculate column positions based on printable area
-        printable_width = (
-            self.template.width_mm 
-            - self.template.margin_left_mm 
-            - self.template.margin_right_mm
-        )
-        col_width = printable_width / num_cols
-        start_x = self.template.margin_left_mm * PX_PER_MM
+        # Get margins from margins_mm tuple (left, top, right, bottom)
+        ml, mt, mr, mb = self.template.margins_mm
+        
+        # ========== DEBUG OUTPUT START ==========
+        print(f"\n[DEBUG] Column Guides Creation")
+        print(f"[DEBUG] Mode: {mode}")
+        print(f"[DEBUG] Number of columns: {num_cols}")
+        print(f"[DEBUG] Template width: {self.template.width_mm}mm")
+        print(f"[DEBUG] Margins (L,T,R,B): {ml}, {mt}, {mr}, {mb} mm")
+        print(f"[DEBUG] PX_PER_MM: {PX_PER_MM}")
+        # ========== DEBUG OUTPUT END ==========
+        
+        # Calculate column positions
+        printable_width = self.template.width_mm - ml - mr
+        start_x = ml * PX_PER_MM
+        
+        # ========== DEBUG OUTPUT START ==========
+        print(f"[DEBUG] Printable width: {printable_width}mm")
+        print(f"[DEBUG] Start X: {start_x}px")
+        # ========== DEBUG OUTPUT END ==========
         
         guide_positions = []
         
-        for i in range(num_cols + 1):  # n+1 guides for n columns
-            x = start_x + (i * col_width * PX_PER_MM)
+        if mode == "Equal width":
+            # Equal width columns
+            col_width = printable_width / num_cols
+            
+            # ========== DEBUG OUTPUT START ==========
+            print(f"[DEBUG] Equal width mode - Column width: {col_width}mm")
+            # ========== DEBUG OUTPUT END ==========
+            
+            for i in range(num_cols + 1):
+                x = start_x + (i * col_width * PX_PER_MM)
+                guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+                self.scene.addItem(guide)
+                self._column_guides.append(guide)
+                guide_positions.append(x)
+                
+                # ========== DEBUG OUTPUT START ==========
+                print(f"[DEBUG] Guide {i}: x={x:.2f}px")
+                # ========== DEBUG OUTPUT END ==========
+        else:
+            # Custom width columns
+            col_width_px = custom_width_mm * PX_PER_MM
+            x = start_x
+            guide_positions.append(x)
+            
+            # ========== DEBUG OUTPUT START ==========
+            print(f"[DEBUG] Custom width mode - Column width: {custom_width_mm}mm ({col_width_px:.2f}px)")
+            print(f"[DEBUG] Guide 0: x={x:.2f}px (left margin)")
+            # ========== DEBUG OUTPUT END ==========
+            
+            # First guide at left margin
             guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
             self.scene.addItem(guide)
             self._column_guides.append(guide)
-            guide_positions.append(x)
+            
+            # Add guides for each column
+            for i in range(num_cols):
+                x += col_width_px
+                if x < (self.template.width_mm - mr) * PX_PER_MM:  # Don't exceed right margin
+                    guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+                    self.scene.addItem(guide)
+                    self._column_guides.append(guide)
+                    guide_positions.append(x)
+                    
+                    # ========== DEBUG OUTPUT START ==========
+                    print(f"[DEBUG] Guide {i+1}: x={x:.2f}px")
+                    # ========== DEBUG OUTPUT END ==========
+                else:
+                    # ========== DEBUG OUTPUT START ==========
+                    print(f"[DEBUG] Guide {i+1} skipped: x={x:.2f}px exceeds right margin")
+                    # ========== DEBUG OUTPUT END ==========
         
-        # *** CRITICAL: Store positions in scene for itemChange() to access ***
+        # Store positions in scene for itemChange() to access
         self.scene.column_guide_positions = guide_positions
         
-        self.statusBar().showMessage(f"Added {num_cols} column guides", 2000)
+        # ========== DEBUG OUTPUT START ==========
+        print(f"[DEBUG] Total guides created: {len(self._column_guides)}")
+        print(f"[DEBUG] Stored {len(guide_positions)} positions in scene.column_guide_positions")
+        print(f"[DEBUG] Positions: {[f'{p:.2f}px' for p in guide_positions]}")
+        print(f"[DEBUG] scene.column_guide_positions = {getattr(self.scene, 'column_guide_positions', 'NOT SET!')}")
+        print(f"[DEBUG] Column guides setup complete\n")
+        # ========== DEBUG OUTPUT END ==========
+        
+        if mode == "Equal width":
+            self.statusBar().showMessage(
+                f"Added {num_cols} equal-width column guides", 2000
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Added {len(guide_positions)} guides at {custom_width_mm}mm width", 2000
+            )
 
     def _set_column_guides(self, mm_values: list[float]):
         """
@@ -3748,6 +3913,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for e in elems:
             item = GItem(e)
             item.undo_stack = self.undo_stack
+            item._main_window = self
             self.scene.addItem(item)
             item.setPos(e.x, e.y)
 

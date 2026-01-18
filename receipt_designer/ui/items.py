@@ -12,7 +12,7 @@ from ..core.barcodes import render_barcode_to_qimage, validate_barcode_data, Bar
 from .views import PX_PER_MM
 from ..core.commands import MoveResizeCmd, MoveLineCmd, ResizeLineCmd
 
-import datetime
+from datetime import datetime
 import os
 import math
 import re
@@ -152,29 +152,44 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
     # ---------- text helpers ----------
     def _resolve_text(self, text: str) -> str:
         """
-        Expand simple template variables inside text.
+        Expand template variables inside text.
 
-        Supported:
-          {{date}}                          -> YYYY-MM-DD
-          {{date:%m/%d/%Y}}                -> custom date format
-          {{time}}                          -> HH:MM (24h)
-          {{time:%I:%M %p}}                -> custom time format
-          {{datetime}}                      -> YYYY-MM-DD HH:MM
-          {{datetime:%b %d, %Y %I:%M %p}}  -> custom datetime format
-          {{id}}                            -> simple placeholder (TEST-001 for now)
+        System variables (handled here):
+        {{date}}                          -> YYYY-MM-DD
+        {{date:%m/%d/%Y}}                -> custom date format
+        {{time}}                          -> HH:MM (24h)
+        {{time:%I:%M %p}}                -> custom time format
+        {{datetime}}                      -> YYYY-MM-DD HH:MM
+        {{datetime:%b %d, %Y %I:%M %p}}  -> custom datetime format
+        {{id}}                            -> simple placeholder (TEST-001 for now)
+        {{year}}                          -> 2026
+        {{month}}                         -> 1 (numeric)
+        {{month_name}}                    -> January
+        {{day}}                           -> 17
+        {{weekday}}                       -> Saturday
+        {{hour}}                          -> 14 (24-hour)
+        {{minute}}                        -> 30
+        {{second}}                        -> 45
+
+        User variables (handled by VariableManager):
+        {{var:variable_name}}             -> user-defined value
 
         Formatting codes are standard Python datetime.strftime tokens.
-        (We no longer add any custom %d/%dd/%mmm sugar.)
         """
         if not text:
             return ""
 
-        now = datetime.datetime.now()
+        now = datetime.now()
+
+        # First, resolve user variables if we have access to the main window
+        # (This will be set up in the integration)
+        if hasattr(self, '_main_window') and hasattr(self._main_window, 'template'):
+            text = self._main_window.template.variable_manager.resolve_text(text)
 
         # Regex for {{date:...}}, {{time:...}}, {{datetime:...}}
         pattern = re.compile(r"\{\{(date|time|datetime)(?::([^}]+))?\}\}")
 
-        def _safe_strftime(dt: datetime.datetime, fmt: str, kind: str) -> str:
+        def _safe_strftime(dt: datetime, fmt: str, kind: str) -> str:
             """Call strftime but never let a bad format crash the app."""
             try:
                 return dt.strftime(fmt)
@@ -204,15 +219,24 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
             # just in case, fall back to original text
             return m.group(0)
 
-        # First, handle date/time/datetime (with or without format)
+        # Handle date/time/datetime (with or without format)
         text = pattern.sub(_replace_match, text)
 
-        # Then, simple non-formatted placeholders (back-compat)
+        # Simple non-formatted placeholders (expanded list)
         replacements = {
             "{{date}}": now.strftime("%Y-%m-%d"),
             "{{time}}": now.strftime("%H:%M"),
             "{{datetime}}": now.strftime("%Y-%m-%d %H:%M"),
             "{{id}}": "TEST-001",   # TODO: real IDs later
+            # NEW: Additional system variables
+            "{{year}}": str(now.year),
+            "{{month}}": str(now.month),
+            "{{month_name}}": now.strftime("%B"),
+            "{{day}}": str(now.day),
+            "{{weekday}}": now.strftime("%A"),
+            "{{hour}}": str(now.hour),
+            "{{minute}}": str(now.minute),
+            "{{second}}": str(now.second),
         }
         for k, v in replacements.items():
             text = text.replace(k, v)
@@ -842,6 +866,8 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
 
             # ========== NEW: Column guide snapping (Patch 6) ==========
             column_guide_positions = getattr(scene, 'column_guide_positions', [])
+           
+
             if column_guide_positions and bw > 0:
                 for guide_x in column_guide_positions:
                     # Snap left edge to guide
@@ -1703,4 +1729,19 @@ class GuideGridItem(ContextMenuMixin, QtWidgets.QGraphicsItem):
 
 
 class GuideLineItem(ContextMenuMixin, QtWidgets.QGraphicsLineItem):
-    pass
+    """
+    Vertical or horizontal guide line for alignment.
+    Non-selectable, always on top, visible blue dashed line.
+    """
+    def __init__(self, x1: float, y1: float, x2: float, y2: float):
+        super().__init__(x1, y1, x2, y2)
+        
+        # Styling - bright blue dashed line so it's very visible
+        pen = QtGui.QPen(QtGui.QColor("#0099ff"), 2, QtCore.Qt.DashLine)
+        self.setPen(pen)
+        
+        # Behavior - guides should not be selectable or movable
+        self.setFlag(QtWidgets.QGraphicsItem.ItemIsSelectable, False)
+        self.setFlag(QtWidgets.QGraphicsItem.ItemIsMovable, False)
+        self.setZValue(9999)  # Always draw on top of everything
+        self.setAcceptedMouseButtons(QtCore.Qt.NoButton)  # Don't capture mouse clicks

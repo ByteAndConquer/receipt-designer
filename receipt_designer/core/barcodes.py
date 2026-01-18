@@ -81,6 +81,71 @@ def upca_checksum(data: str) -> str:
     total = odd_sum * 3 + even_sum
     return str((10 - (total % 10)) % 10)
 
+def ean8_checksum(data: str) -> str:
+    """
+    Compute the EAN-8 checksum digit for the first 7 digits of `data`.
+    """
+    digits = [int(ch) for ch in data[:7] if ch.isdigit()]
+    if len(digits) != 7:
+        raise ValueError("EAN-8 requires at least 7 digits for checksum")
+    
+    # EAN-8 uses alternating weights: 3, 1, 3, 1, 3, 1, 3
+    s = 0
+    for i, d in enumerate(digits):
+        s += d * (3 if (i % 2 == 0) else 1)
+    return str((10 - (s % 10)) % 10)
+
+
+def isbn10_checksum(data: str) -> str:
+    """
+    Compute ISBN-10 checksum for first 9 characters.
+    Returns '0'-'9' or 'X' for check digit.
+    """
+    data = data[:9]
+    if len(data) != 9 or not data.isdigit():
+        raise ValueError("ISBN-10 checksum requires 9 digits")
+    
+    total = sum((10 - i) * int(data[i]) for i in range(9))
+    check = (11 - (total % 11)) % 11
+    return 'X' if check == 10 else str(check)
+
+
+def issn_checksum(data: str) -> str:
+    """
+    Compute ISSN checksum for first 7 digits.
+    Returns '0'-'9' or 'X' for check digit.
+    """
+    data = data[:7]
+    if len(data) != 7 or not data.isdigit():
+        raise ValueError("ISSN checksum requires 7 digits")
+    
+    total = sum((8 - i) * int(data[i]) for i in range(7))
+    check = (11 - (total % 11)) % 11
+    return 'X' if check == 10 else str(check)
+
+
+def isbn10_to_isbn13(isbn10: str) -> str:
+    """
+    Convert ISBN-10 to ISBN-13.
+    
+    Args:
+        isbn10: 10-character ISBN-10 (with or without hyphens)
+    
+    Returns:
+        13-digit ISBN-13 string
+    
+    Example:
+        isbn10_to_isbn13("0596520689") -> "9780596520687"
+        isbn10_to_isbn13("0-596-52068-9") -> "9780596520687"
+    """
+    isbn10 = isbn10.strip().upper().replace('-', '').replace(' ', '')
+    if len(isbn10) != 10:
+        raise ValueError(f"Invalid ISBN-10 length: {len(isbn10)} (expected 10)")
+    
+    # Add 978 prefix and recalculate checksum using EAN-13 algorithm
+    isbn13_base = '978' + isbn10[:9]
+    checksum = ean13_checksum(isbn13_base)
+    return isbn13_base + checksum
 
 # --- Utility: Pillow → QImage ---------------------------------------------
 
@@ -110,8 +175,11 @@ def _render_1d_barcode(kind: str, data: str) -> Optional[QtGui.QImage]:
       - Code 128
       - Code 39
       - EAN-13
+      - EAN-8
       - UPC-A
       - ITF (Interleaved 2 of 5)
+      - ISBN-13
+      - ISBN-10
 
     Phase 2 extras (UPC-E, Codabar, GS1-128, etc.) are handled
     via treepoem instead.
@@ -128,6 +196,25 @@ def _render_1d_barcode(kind: str, data: str) -> Optional[QtGui.QImage]:
         cls_name = "code39"
     elif key == "ean13":
         cls_name = "ean13"
+    elif key in {"ean8", "ean-8"}:
+        cls_name = "ean8"
+    elif key in {"isbn13", "isbn-13"}:
+        cls_name = "ean13"
+        # ISBN-13 is just EAN-13 with 978/979 prefix - validate it
+        digits = "".join(ch for ch in data if ch.isdigit())
+        if not digits.startswith(('978', '979')):
+            return None  # Invalid ISBN-13 prefix
+    elif key in {"isbn10", "isbn-10", "isbn"}:
+        # Convert ISBN-10 to ISBN-13 for rendering
+        try:
+            digits = "".join(ch for ch in data if ch.isdigit() or ch.upper() == 'X')
+            if len(digits) == 10:
+                data = isbn10_to_isbn13(digits)
+                cls_name = "ean13"
+            else:
+                return None
+        except:
+            return None
     elif key in {"upca", "upc"}:
         cls_name = "upc"
     elif key.startswith("itf"):
@@ -135,12 +222,21 @@ def _render_1d_barcode(kind: str, data: str) -> Optional[QtGui.QImage]:
     else:
         return None  # not a python-barcode type
 
-    # EAN-13 / UPC-A: normalize / auto-checkdigit
+    # EAN-13 / UPC-A / EAN-8: normalize / auto-checkdigit
     if cls_name == "ean13":
         digits = "".join(ch for ch in data if ch.isdigit())
         if len(digits) == 12:
             digits = digits + ean13_checksum(digits)
         if len(digits) != 13:
+            return None
+        data = digits
+
+    if cls_name == "ean8":
+        digits = "".join(ch for ch in data if ch.isdigit())
+        if len(digits) == 7:
+            # auto check-digit
+            digits = digits + ean8_checksum(digits)
+        elif len(digits) != 8:
             return None
         data = digits
 
@@ -263,16 +359,17 @@ def _render_treepoem(kind: str, data: str) -> Optional[QtGui.QImage]:
 
 def render_barcode_to_qimage(kind: str, data: str) -> QtGui.QImage:
     """
-    Render a barcode or 2D code to a QImage, with caching.
-
     Supported (assuming libs installed):
 
       python-barcode:
         - Code128
         - Code39
         - EAN-13 (auto check digit if 12 digits)
+        - EAN-8 (auto check digit if 7 digits)
         - UPC-A  (auto check digit if 11 digits)
         - ITF
+        - ISBN-13 (EAN-13 with 978/979 prefix)
+        - ISBN-10 (converted to EAN-13 for rendering)
 
       treepoem:
         - UPC-E
@@ -283,6 +380,7 @@ def render_barcode_to_qimage(kind: str, data: str) -> QtGui.QImage:
         - PDF417
         - Aztec
         - GS1 DataMatrix
+        - ISSN (rendered as EAN-13)
 
       qrcode:
         - QR Code
@@ -438,6 +536,151 @@ def _validate_upca(data: str, auto_checksum: bool = True) -> str:
         raise BarcodeValidationError(
             f"Invalid UPC-A check digit: got {cd}, expected {expected}."
         )
+    return data
+
+def _validate_ean8(data: str, auto_checksum: bool = True) -> str:
+    """
+    Validate EAN-8 barcode data.
+    
+    Args:
+        data: 7 or 8 digit string
+        auto_checksum: If True, auto-generate checksum for 7-digit input
+    
+    Returns:
+        Normalized 8-digit EAN-8 string
+    
+    Raises:
+        BarcodeValidationError: If data is invalid
+    """
+    data = (data or "").strip()
+    if not data:
+        raise BarcodeValidationError("EAN-8 data cannot be empty.")
+    if not data.isdigit():
+        raise BarcodeValidationError("EAN-8 supports digits only.")
+    if len(data) not in (7, 8):
+        raise BarcodeValidationError("EAN-8 must be 7 or 8 digits long.")
+    
+    if len(data) == 7:
+        if not auto_checksum:
+            raise BarcodeValidationError(
+                "EAN-8 is 7 digits + 1 check digit. Provide 8 digits or enable auto checksum."
+            )
+        cd = ean8_checksum(data)
+        return data + cd
+    
+    # Validate existing checksum
+    body = data[:-1]
+    cd = data[-1]
+    expected = ean8_checksum(body)
+    if cd != expected:
+        raise BarcodeValidationError(
+            f"Invalid EAN-8 check digit: got {cd}, expected {expected}."
+        )
+    return data
+
+
+def _validate_isbn13(data: str) -> str:
+    """
+    Validate ISBN-13 (which is EAN-13 with 978/979 prefix).
+    
+    Args:
+        data: 12 or 13 digit string starting with 978 or 979
+    
+    Returns:
+        Normalized 13-digit ISBN-13 string
+    
+    Raises:
+        BarcodeValidationError: If data is invalid
+    """
+    data = (data or "").strip().replace('-', '').replace(' ', '')
+    
+    # ISBN-13 must start with 978 or 979 (Bookland prefix)
+    if not data.startswith(('978', '979')):
+        raise BarcodeValidationError(
+            "ISBN-13 must start with 978 or 979 (Bookland prefix)."
+        )
+    
+    # Use EAN-13 validation (ISBN-13 is just EAN-13 with special prefix)
+    return _validate_ean13(data, auto_checksum=True)
+
+
+def _validate_isbn10(data: str) -> str:
+    """
+    Validate ISBN-10 with specific checksum algorithm.
+    
+    Args:
+        data: 10-character string (9 digits + check digit 0-9 or X)
+    
+    Returns:
+        Normalized 10-character ISBN-10 string
+    
+    Raises:
+        BarcodeValidationError: If data is invalid
+    """
+    data = data.strip().upper().replace('-', '').replace(' ', '')
+    
+    if len(data) != 10:
+        raise BarcodeValidationError(f"ISBN-10 must be 10 characters (got {len(data)}).")
+    
+    # First 9 must be digits
+    if not data[:9].isdigit():
+        raise BarcodeValidationError("First 9 characters of ISBN-10 must be digits.")
+    
+    # Last character can be digit or 'X'
+    if not (data[9].isdigit() or data[9] == 'X'):
+        raise BarcodeValidationError("ISBN-10 check digit must be 0-9 or X.")
+    
+    # Validate checksum
+    total = sum((10 - i) * int(data[i]) for i in range(9))
+    check = data[9]
+    check_value = 10 if check == 'X' else int(check)
+    
+    if (total + check_value) % 11 != 0:
+        expected = isbn10_checksum(data[:9])
+        raise BarcodeValidationError(
+            f"Invalid ISBN-10 checksum (expected {expected}, got {check})."
+        )
+    
+    return data
+
+
+def _validate_issn(data: str) -> str:
+    """
+    Validate ISSN (International Standard Serial Number).
+    Used for magazines, journals, and periodicals.
+    
+    Args:
+        data: 8-character string (7 digits + check digit 0-9 or X)
+    
+    Returns:
+        Normalized 8-character ISSN string
+    
+    Raises:
+        BarcodeValidationError: If data is invalid
+    """
+    data = data.strip().upper().replace('-', '').replace(' ', '')
+    
+    if len(data) != 8:
+        raise BarcodeValidationError(f"ISSN must be 8 characters (got {len(data)}).")
+    
+    # First 7 must be digits
+    if not data[:7].isdigit():
+        raise BarcodeValidationError("First 7 characters of ISSN must be digits.")
+    
+    # Last character can be digit or 'X'
+    if not (data[7].isdigit() or data[7] == 'X'):
+        raise BarcodeValidationError("ISSN check character must be 0-9 or X.")
+    
+    # Validate checksum
+    total = sum((8 - i) * int(data[i]) for i in range(7))
+    check_value = 10 if data[7] == 'X' else int(data[7])
+    
+    if (total + check_value) % 11 != 0:
+        expected = issn_checksum(data[:7])
+        raise BarcodeValidationError(
+            f"Invalid ISSN checksum (expected {expected}, got {data[7]})."
+        )
+    
     return data
 
 
@@ -634,6 +877,8 @@ def _barcode_help_text(self, kind: str) -> str:
         return "UPC-A: 11 or 12 digits; check digit is validated automatically."
     if k in ("ean-13", "ean13"):
         return "EAN-13: 12 or 13 digits; check digit is validated automatically."
+    if k in ("ean-8", "ean8"):
+        return "EAN-8: 7 or 8 digits; check digit is validated automatically."
     if k in ("code39", "code 39", "code-39"):
         return "Code 39: A–Z, 0–9, space, - . $ / + % (no * in data)."
     if k in ("itf", "itf-14"):
@@ -643,6 +888,12 @@ def _barcode_help_text(self, kind: str) -> str:
             "Codabar: data must start and end with A, B, C, or D.\n"
             "Allowed chars: 0–9, - : $ / . + and A–D."
         )
+    if k in ("isbn-13", "isbn13"):
+        return "ISBN-13: 13 digits starting with 978 or 979; used for books."
+    if k in ("isbn-10", "isbn10", "isbn"):
+        return "ISBN-10: 10 characters (9 digits + check digit 0-9 or X); used for older books."
+    if k == "issn":
+        return "ISSN: 8 characters (7 digits + check digit 0-9 or X); used for periodicals."
     if k == "data matrix" or k == "datamatrix":
         return "Data Matrix: free-form text; keep it under ~2000 characters."
     if k == "pdf417":
@@ -656,6 +907,38 @@ def _barcode_help_text(self, kind: str) -> str:
 
     return ""
 
+def get_supported_barcode_types() -> list[str]:
+    """
+    Get list of all supported barcode types.
+    Returns display names in user-friendly format.
+    
+    Returns:
+        List of barcode type names suitable for UI dropdowns
+    
+    Example:
+        types = get_supported_barcode_types()
+        # ['Code 128', 'Code 39', 'EAN-13', ...]
+    """
+    return [
+        "Code 128",
+        "Code 39",
+        "EAN-13",
+        "EAN-8",
+        "UPC-A",
+        "UPC-E",
+        "ITF",
+        "ITF-14",
+        "ISBN-13",
+        "ISBN-10",
+        "ISSN",
+        "Codabar",
+        "QR Code",
+        "Data Matrix",
+        "PDF417",
+        "Aztec Code",
+        "GS1-128",
+        "GS1 DataMatrix",
+    ]
 
 def validate_barcode_data(kind: str, data: str) -> str:
     """
@@ -674,8 +957,16 @@ def validate_barcode_data(kind: str, data: str) -> str:
         return _validate_itf(data)
     if key == "ean13":
         return _validate_ean13(data)
+    if key in {"ean8", "ean-8"}:
+        return _validate_ean8(data)
     if key in {"upca", "upc"}:
         return _validate_upca(data)
+    if key in {"isbn13", "isbn-13"}:
+        return _validate_isbn13(data)
+    if key in {"isbn10", "isbn-10", "isbn"}:
+        return _validate_isbn10(data)
+    if key == "issn":
+        return _validate_issn(data)
     if key == "upce":
         return _validate_upce(data)
     if key in {"codabar", "codebar"}:
