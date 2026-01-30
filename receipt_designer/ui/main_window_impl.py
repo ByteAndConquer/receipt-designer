@@ -11,6 +11,7 @@ from ..core.commands import AddItemCmd, DeleteItemCmd, MoveResizeCmd, PropertyCh
 from ..core.render import scene_to_image
 from ..core.barcodes import render_barcode_to_qimage, ean13_checksum, upca_checksum  # not strictly used yet
 from ..printing.worker import PrinterWorker
+from ..printing.profiles import PrinterProfile, load_profiles, save_profiles
 from .items import (
     GItem,
     GLineItem,
@@ -34,7 +35,7 @@ from .variables import VariablePanel
 # -------------------------
 ORG_NAME = "ByteSized Labs"
 APP_NAME = "Receipt Lab"
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.9.5"
 
 QtCore.QCoreApplication.setOrganizationName(ORG_NAME)
 QtCore.QCoreApplication.setApplicationName(APP_NAME)
@@ -608,7 +609,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.action_margins)
-        
+
+        # Dark mode toggle
+        self.action_dark_mode = QtGui.QAction("Dark Mode", self)
+        self.action_dark_mode.setCheckable(True)
+        self.action_dark_mode.setChecked(self.settings.value("ui/dark_mode", False, type=bool))
+        self.action_dark_mode.setToolTip("Toggle dark mode appearance")
+        self.action_dark_mode.toggled.connect(self._toggle_dark_mode)
+        view_menu.addAction(self.action_dark_mode)
+
+        view_menu.addSeparator()
         # NOTE: Variables panel menu item will be added in _update_view_menu()
         # which is called after _build_docks() completes
 
@@ -858,8 +868,77 @@ class MainWindow(QtWidgets.QMainWindow):
     # Theme & paper
     # -------------------------
     def apply_theme(self):
-        # keep it neutral; you can swap in dark later
-        self.setStyleSheet("")
+        """Apply light or dark theme based on saved preference."""
+        is_dark = self.settings.value("ui/dark_mode", False, type=bool)
+        self._apply_theme_mode(is_dark)
+
+    def _apply_theme_mode(self, dark: bool):
+        """Apply the specified theme mode (True=dark, False=light)."""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+
+        if dark:
+            # Dark palette
+            palette = QtGui.QPalette()
+            dark_color = QtGui.QColor(45, 45, 45)
+            darker_color = QtGui.QColor(35, 35, 35)
+            text_color = QtGui.QColor(220, 220, 220)
+            disabled_color = QtGui.QColor(127, 127, 127)
+            highlight_color = QtGui.QColor(42, 130, 218)
+            link_color = QtGui.QColor(42, 130, 218)
+
+            palette.setColor(QtGui.QPalette.Window, dark_color)
+            palette.setColor(QtGui.QPalette.WindowText, text_color)
+            palette.setColor(QtGui.QPalette.Base, darker_color)
+            palette.setColor(QtGui.QPalette.AlternateBase, dark_color)
+            palette.setColor(QtGui.QPalette.ToolTipBase, dark_color)
+            palette.setColor(QtGui.QPalette.ToolTipText, text_color)
+            palette.setColor(QtGui.QPalette.Text, text_color)
+            palette.setColor(QtGui.QPalette.Button, dark_color)
+            palette.setColor(QtGui.QPalette.ButtonText, text_color)
+            palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+            palette.setColor(QtGui.QPalette.Link, link_color)
+            palette.setColor(QtGui.QPalette.Highlight, highlight_color)
+            palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+
+            # Disabled state
+            palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.WindowText, disabled_color)
+            palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, disabled_color)
+            palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, disabled_color)
+
+            app.setPalette(palette)
+            # Minimal stylesheet for elements QPalette doesn't fully cover
+            app.setStyleSheet("""
+                QToolTip { color: #dcdcdc; background-color: #2d2d2d; border: 1px solid #555555; }
+            """)
+
+            # Update canvas background for dark mode
+            if hasattr(self, 'view'):
+                self.view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#1e1e1e")))
+                if hasattr(self.view, 'setDarkMode'):
+                    self.view.setDarkMode(True)
+        else:
+            # Light mode - restore default palette
+            app.setPalette(app.style().standardPalette())
+            app.setStyleSheet("")
+
+            # Update canvas background for light mode
+            if hasattr(self, 'view'):
+                self.view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
+                if hasattr(self.view, 'setDarkMode'):
+                    self.view.setDarkMode(False)
+
+        # Force repaint
+        if hasattr(self, 'view'):
+            self.view.viewport().update()
+
+    def _toggle_dark_mode(self, checked: bool):
+        """Toggle dark mode on/off and persist the setting."""
+        self.settings.setValue("ui/dark_mode", checked)
+        self._apply_theme_mode(checked)
+        mode_name = "Dark" if checked else "Light"
+        self.statusBar().showMessage(f"{mode_name} mode enabled", 2000)
 
     def update_paper(self):
         # set scene rect from Template
@@ -870,6 +949,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # expose properties that RulerView expects
         self.scene.setProperty("paper_width", w)
         self.scene.setProperty("paper_height", h)
+        self.scene.setProperty("dpi", self.template.dpi)
 
         # margins_mm on scene: (left, top, right, bottom)
         # You wanted only left/right margins, top/bottom = 0
@@ -1165,6 +1245,36 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
+        # ========== Portable asset copy dialog ==========
+        final_path = path  # Default: link to original
+        if self._current_file_path:
+            # Template is saved - offer to copy into assets/
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle("Add Image")
+            msg.setText("Copy image into this template's folder for portability?")
+            msg.setInformativeText(
+                "Copying makes the template self-contained and easier to share."
+            )
+            btn_copy = msg.addButton("Copy to assets/ (recommended)", QtWidgets.QMessageBox.AcceptRole)
+            btn_link = msg.addButton("Link to original file", QtWidgets.QMessageBox.RejectRole)
+            btn_cancel = msg.addButton(QtWidgets.QMessageBox.Cancel)
+            msg.setDefaultButton(btn_copy)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == btn_cancel:
+                return  # User cancelled
+            elif clicked == btn_copy:
+                copied_path = self._copy_image_to_assets(path)
+                if copied_path:
+                    final_path = copied_path  # Use relative path to copied file
+                # If copy failed, final_path stays as original absolute path
+        else:
+            # Template not saved yet - show gentle info message
+            self.statusBar().showMessage(
+                "Tip: Save the template to enable portable asset copying.", 5000
+            )
+
         # ========== Patch 9: Element creation with error handling ==========
         try:
             # default geometry in px
@@ -1188,7 +1298,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 w=float(w_px),
                 h=float(h_px),
             )
-            elem.image_path = path
+            elem.image_path = final_path
 
             item = GItem(elem)
             item.undo_stack = self.undo_stack
@@ -1282,6 +1392,9 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Render the current scene to a QImage and send it to the printer worker.
         """
+        # Check for missing variables (non-blocking warning)
+        self._warn_missing_variables()
+
         # ========== Patch 9: Render with error handling ==========
         try:
             img = scene_to_image(self.scene, scale=1.0)
@@ -1576,7 +1689,10 @@ class MainWindow(QtWidgets.QMainWindow):
             for it in self.scene.items():
                 if isinstance(it, GItem):
                     elements.append(it.elem.to_dict())
-            
+
+            # Make asset paths portable (relative where possible)
+            elements = self._make_elements_portable(elements, path)
+
             t = Template(
                 width_mm=self.template.width_mm,
                 height_mm=self.template.height_mm,
@@ -1587,6 +1703,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 grid=self.template.grid,
                 name=self.template.name,
                 version=self.template.version,
+                variable_manager=self.template.variable_manager,
             )
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -1597,7 +1714,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "One or more elements may have invalid data."
             )
             return
-        
+
         # ========== Patch 9: Write file with error handling ==========
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -1652,12 +1769,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 "File Not Found",
                 f"The file could not be found:\n{path}"
             )
-            # Remove from recent files if it was there
-            recent = self.settings.value("recent_files", []) or []
-            if path in recent:
-                recent.remove(path)
-                self.settings.setValue("recent_files", recent)
-                self._refresh_recent_menu()
+            # Remove from recent files using normalized comparison
+            self._remove_from_recent_by_normalized(path)
             return
         except PermissionError:
             QtWidgets.QMessageBox.critical(
@@ -1691,8 +1804,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error: {type(e).__name__}: {e}"
             )
             return
-        
-        # ========== Patch 9: Template parsing with error handling ==========
+
+        # ========== Resolve relative asset paths to absolute ==========
+        # This allows templates with relative paths to work after being moved
+        if "elements" in data and isinstance(data["elements"], list):
+            data["elements"] = self._resolve_element_paths(data["elements"], path)
+
+        # Remove autosave metadata key if present (user may open autosave file directly)
+        data.pop("_autosave_original_path", None)
+
+        # ========== Patch 9: Parse template with specific error handling ==========
         try:
             self.template = Template.from_dict(data)
         except KeyError as e:
@@ -1718,8 +1839,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error: {type(e).__name__}: {e}"
             )
             return
-        
-        # ========== Patch 9: Scene building with error handling ==========
+
+        # ========== Patch 9: Build scene with error handling ==========
         try:
             self.scene.clear()
             for e in self.template.elements:
@@ -1731,14 +1852,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
             self.update_paper()
             self._refresh_layers_safe()
-            
+            self._refresh_variable_panel()
+
             # Patch 3 additions:
             self._current_file_path = path
-            self._add_to_recent_files(path)
+            self._update_recent_files(path)
             self._has_unsaved_changes = False
             self.undo_stack.clear()
             self._clear_column_guides()
-            
+
             self.statusBar().showMessage(f"Loaded: {path}", 3000)
             
         except Exception as e:
@@ -1778,7 +1900,12 @@ class MainWindow(QtWidgets.QMainWindow):
             for it in self.scene.items():
                 if isinstance(it, GItem):
                     elements.append(it.elem.to_dict())
-            
+
+            # Make asset paths portable if we have a saved template path
+            # (allows recovery to work correctly when moved to another machine)
+            if self._current_file_path:
+                elements = self._make_elements_portable(elements, self._current_file_path)
+
             # Create template snapshot
             t = Template(
                 width_mm=self.template.width_mm,
@@ -1790,6 +1917,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 grid=self.template.grid,
                 name=self.template.name,
                 version=self.template.version,
+                variable_manager=self.template.variable_manager,
             )
         except (KeyError, ValueError, TypeError, AttributeError) as e:
             # Don't show dialog for auto-save serialization failures, just log
@@ -1799,20 +1927,40 @@ class MainWindow(QtWidgets.QMainWindow):
             print(f"Auto-save unexpected serialization error: {type(e).__name__}: {e}")
             return
         
-        # ========== Patch 9: File writing with specific error handling ==========
+        # ========== Atomic write to prevent corruption on crash/power loss ==========
+        tmp_path = autosave_path + ".tmp"
         try:
-            with open(autosave_path, "w", encoding="utf-8") as f:
-                json.dump(t.to_dict(), f, indent=2)
-            
+            # Prepare autosave data with original file path for recovery
+            autosave_data = t.to_dict()
+            # Store original template path so relative assets can be resolved on recovery
+            if self._current_file_path:
+                autosave_data["_autosave_original_path"] = self._current_file_path
+
+            # Write to temp file first
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(autosave_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())  # Ensure data is written to disk
+
+            # Atomically replace the final file (Windows-safe)
+            os.replace(tmp_path, autosave_path)
+
             # Brief status update on success
             self.statusBar().showMessage("Auto-saved", 2000)
-            
+
         except PermissionError:
             print(f"Auto-save permission denied: {autosave_path}")
         except OSError as e:
             print(f"Auto-save I/O error: {e}")
         except Exception as e:
             print(f"Auto-save unexpected write error: {type(e).__name__}: {e}")
+        finally:
+            # Clean up temp file if it still exists (failed before replace)
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
 
     def _load_crash_recovery(self):
         """Check for auto-saved file on startup and offer to restore"""
@@ -1840,7 +1988,14 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 with open(autosave_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                
+
+                # Resolve relative asset paths using original template location
+                original_path = data.pop("_autosave_original_path", None)
+                if original_path and "elements" in data and isinstance(data["elements"], list):
+                    data["elements"] = self._resolve_element_paths(data["elements"], original_path)
+                    # Restore the current file path so subsequent saves work correctly
+                    self._current_file_path = original_path
+
                 self.template = Template.from_dict(data)
                 
                 # Clear scene and rebuild
@@ -1854,6 +2009,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 self.update_paper()
                 self._refresh_layers_safe()
+                self._refresh_variable_panel()
                 self.statusBar().showMessage("Auto-saved work restored", 3000)
                 
             except Exception as e:
@@ -1868,6 +2024,246 @@ class MainWindow(QtWidgets.QMainWindow):
             os.remove(autosave_path)
         except:
             pass
+
+    # ------------ Recent Files Helpers ------------
+
+    def _normalize_path(self, path: str) -> str:
+        """
+        Normalize a file path for consistent comparison and deduplication.
+
+        On Windows this ensures paths like 'C:/foo/bar.json' and 'c:\\foo\\BAR.JSON'
+        are recognized as the same file.
+
+        Returns normalized path for comparison; original path is kept for display.
+        """
+        if not path:
+            return ""
+        # Expand user home directory if present
+        path = os.path.expanduser(path)
+        # Convert to absolute path
+        path = os.path.abspath(path)
+        # Normalize separators and resolve .. / .
+        path = os.path.normpath(path)
+        # Normalize case on Windows (lowercase on Windows, unchanged on Unix)
+        path = os.path.normcase(path)
+        return path
+
+    def _dedupe_recent_files(self, paths: list) -> list:
+        """
+        Remove duplicate paths from recent files list based on normalized paths.
+
+        Preserves order (first occurrence wins) and keeps display-friendly paths.
+        """
+        seen_normalized = set()
+        deduped = []
+        for path in paths:
+            norm = self._normalize_path(path)
+            if norm and norm not in seen_normalized:
+                seen_normalized.add(norm)
+                deduped.append(path)
+        return deduped
+
+    def _remove_from_recent_by_normalized(self, path_to_remove: str) -> None:
+        """
+        Remove a path from recent files, matching by normalized path.
+
+        This handles cases where the stored path has different casing/slashes.
+        """
+        norm_to_remove = self._normalize_path(path_to_remove)
+        recent = self.settings.value("recent_files", [], type=list)
+
+        # Filter out any path that normalizes to the same value
+        updated = [p for p in recent if self._normalize_path(p) != norm_to_remove]
+
+        if len(updated) != len(recent):
+            self.settings.setValue("recent_files", updated)
+            self._refresh_recent_menu()
+
+    # ------------ Portable Asset Path Helpers ------------
+
+    def _make_asset_path_portable(self, asset_path: str, template_path: str) -> str:
+        """
+        Convert an absolute asset path to relative if it's inside the template directory.
+
+        Args:
+            asset_path: The asset file path (e.g., image_path from an Element)
+            template_path: The path to the template JSON file being saved
+
+        Returns:
+            Relative path if asset is under template_dir, else original path unchanged.
+        """
+        if not asset_path or not template_path:
+            return asset_path
+
+        # Skip if already relative
+        if not os.path.isabs(asset_path):
+            return asset_path
+
+        try:
+            template_dir = os.path.dirname(os.path.abspath(template_path))
+            asset_abs = os.path.abspath(asset_path)
+
+            # Normalize for comparison (handles case on Windows)
+            template_dir_norm = os.path.normcase(os.path.normpath(template_dir))
+            asset_abs_norm = os.path.normcase(os.path.normpath(asset_abs))
+
+            # Check if asset is under template directory
+            # Use os.path.commonpath for reliable prefix checking
+            try:
+                common = os.path.commonpath([template_dir_norm, asset_abs_norm])
+                if common == template_dir_norm:
+                    # Asset is under template dir - make relative
+                    rel_path = os.path.relpath(asset_abs, template_dir)
+                    return rel_path
+            except ValueError:
+                # Different drives on Windows (e.g., C: vs D:)
+                pass
+
+        except Exception:
+            # Any error - keep original path
+            pass
+
+        return asset_path
+
+    def _resolve_asset_path(self, asset_path: str, template_path: str) -> str:
+        """
+        Resolve an asset path, converting relative paths to absolute based on template location.
+
+        Args:
+            asset_path: The asset file path from the template (may be relative or absolute)
+            template_path: The path to the template JSON file being loaded
+
+        Returns:
+            Absolute path if input was relative, else original path unchanged.
+        """
+        if not asset_path:
+            return asset_path
+
+        # If already absolute, return as-is
+        if os.path.isabs(asset_path):
+            return asset_path
+
+        # Relative path - resolve against template directory
+        if not template_path:
+            return asset_path
+
+        try:
+            template_dir = os.path.dirname(os.path.abspath(template_path))
+            resolved = os.path.normpath(os.path.join(template_dir, asset_path))
+            return resolved
+        except Exception:
+            # Any error - keep original path
+            return asset_path
+
+    def _make_elements_portable(self, elements: list, template_path: str) -> list:
+        """
+        Process element dicts to make asset paths portable (relative where possible).
+
+        Args:
+            elements: List of element dicts (from to_dict())
+            template_path: The template file path being saved to
+
+        Returns:
+            New list of element dicts with portable paths
+        """
+        if not template_path:
+            return elements
+
+        result = []
+        for elem_dict in elements:
+            # Make a copy to avoid mutating original
+            elem_copy = dict(elem_dict)
+
+            # Convert image_path to relative if eligible
+            if elem_copy.get("image_path"):
+                elem_copy["image_path"] = self._make_asset_path_portable(
+                    elem_copy["image_path"], template_path
+                )
+
+            result.append(elem_copy)
+
+        return result
+
+    def _resolve_element_paths(self, elements: list, template_path: str) -> list:
+        """
+        Process element dicts to resolve relative asset paths to absolute.
+
+        Args:
+            elements: List of element dicts (from template JSON)
+            template_path: The template file path being loaded from
+
+        Returns:
+            New list of element dicts with resolved absolute paths
+        """
+        if not template_path:
+            return elements
+
+        result = []
+        for elem_dict in elements:
+            # Make a copy to avoid mutating original
+            elem_copy = dict(elem_dict)
+
+            # Resolve image_path if relative
+            if elem_copy.get("image_path"):
+                elem_copy["image_path"] = self._resolve_asset_path(
+                    elem_copy["image_path"], template_path
+                )
+
+            result.append(elem_copy)
+
+        return result
+
+    def _copy_image_to_assets(self, source_path: str) -> str | None:
+        """
+        Copy an image file into the template's assets/ folder.
+
+        Args:
+            source_path: Absolute path to the source image file
+
+        Returns:
+            Relative path to the copied file (e.g., "assets/logo.png"), or None if copy failed/cancelled.
+        """
+        import shutil
+
+        template_path = self._current_file_path
+        if not template_path:
+            return None
+
+        try:
+            template_dir = os.path.dirname(os.path.abspath(template_path))
+            assets_dir = os.path.join(template_dir, "assets")
+
+            # Create assets/ directory if needed
+            os.makedirs(assets_dir, exist_ok=True)
+
+            # Get original filename
+            original_name = os.path.basename(source_path)
+            base, ext = os.path.splitext(original_name)
+
+            # Handle name collisions: logo.png -> logo_2.png -> logo_3.png
+            dest_name = original_name
+            dest_path = os.path.join(assets_dir, dest_name)
+            counter = 2
+            while os.path.exists(dest_path):
+                dest_name = f"{base}_{counter}{ext}"
+                dest_path = os.path.join(assets_dir, dest_name)
+                counter += 1
+
+            # Copy the file
+            shutil.copy2(source_path, dest_path)
+
+            # Return relative path from template directory
+            rel_path = os.path.relpath(dest_path, template_dir)
+            return rel_path
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Copy Failed",
+                f"Could not copy image to assets folder:\n\n{e}\n\n"
+                "The original file will be linked instead."
+            )
+            return None
 
     def _refresh_recent_menu(self):
         """Refresh the Recent Files menu from settings"""
@@ -1901,30 +2297,32 @@ class MainWindow(QtWidgets.QMainWindow):
         act_clear.triggered.connect(self._clear_recent_files)
 
     def _update_recent_files(self, path: str):
-        """Add a file to the recent files list"""
+        """Add a file to the recent files list with normalized deduplication."""
         if not path:
             return
-        
+
+        # Normalize for storage (keeps consistent format)
         path = os.path.abspath(path)
-        
+        norm_path = self._normalize_path(path)
+
         recent = self.settings.value("recent_files", [], type=list)
-        
-        # Remove if already in list
-        if path in recent:
-            recent.remove(path)
-        
+
+        # Remove any existing entry that normalizes to the same path
+        # (handles different casing/slashes pointing to same file)
+        recent = [p for p in recent if self._normalize_path(p) != norm_path]
+
         # Add to front
         recent.insert(0, path)
-        
-        # Keep only 10 most recent
-        recent = recent[:10]
+
+        # Dedupe (in case of any edge cases) and cap at 10
+        recent = self._dedupe_recent_files(recent)[:10]
         
         self.settings.setValue("recent_files", recent)
         self._refresh_recent_menu()
 
     def _load_template_path(self, path: str):
         """Load template from a specific file path with improved error handling"""
-        # ========== Patch 9: Validate file exists ==========
+        # ========== Validate file exists ==========
         if not os.path.exists(path):
             reply = QtWidgets.QMessageBox.question(
                 self,
@@ -1933,13 +2331,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Remove it from recent files?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
             )
-            
+
             if reply == QtWidgets.QMessageBox.Yes:
-                recent = self.settings.value("recent_files", [], type=list)
-                if path in recent:
-                    recent.remove(path)
-                    self.settings.setValue("recent_files", recent)
-                    self._refresh_recent_menu()
+                # Use normalized removal to handle casing/slash differences
+                self._remove_from_recent_by_normalized(path)
             return
         
         # ========== Patch 9: Load file with specific error handling ==========
@@ -1978,7 +2373,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error: {type(e).__name__}: {e}"
             )
             return
-        
+
+        # ========== Resolve relative asset paths to absolute ==========
+        # This allows templates with relative paths to work after being moved
+        if "elements" in data and isinstance(data["elements"], list):
+            data["elements"] = self._resolve_element_paths(data["elements"], path)
+
+        # Remove autosave metadata key if present (user may open autosave file directly)
+        data.pop("_autosave_original_path", None)
+
         # ========== Patch 9: Parse template with specific error handling ==========
         try:
             self.template = Template.from_dict(data)
@@ -2005,7 +2408,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Error: {type(e).__name__}: {e}"
             )
             return
-        
+
         # ========== Patch 9: Build scene with error handling ==========
         try:
             self.scene.clear()
@@ -2018,13 +2421,14 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.update_paper()
             self._refresh_layers_safe()
-            
+            self._refresh_variable_panel()
+
             self._current_file_path = path
             self._update_recent_files(path)  # Move to top of recent list
             self._has_unsaved_changes = False
             self.undo_stack.clear()
             self._clear_column_guides()
-            
+
             self.statusBar().showMessage(f"Loaded: {os.path.basename(path)}", 3000)
             
         except Exception as e:
@@ -2052,6 +2456,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def preview_print(self):
         """Show print preview dialog before printing"""
+        # Check for missing variables (non-blocking warning)
+        self._warn_missing_variables()
+
         img = scene_to_image(self.scene, scale=1.0)
         
         if img is None or img.isNull():
@@ -2095,8 +2502,8 @@ class MainWindow(QtWidgets.QMainWindow):
         moving_bottom = moving_rect.bottom()
         moving_vcenter = moving_rect.center().y()
         
-        scene_height = self.template.height_mm * PX_PER_MM
-        scene_width = self.template.width_mm * PX_PER_MM
+        scene_height = self.template.height_px
+        scene_width = self.template.width_px
         
         for other in other_items:
             other_rect = other.sceneBoundingRect()
@@ -2335,55 +2742,63 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _load_printer_profiles(self) -> None:
         """
-        Load printer profiles from QSettings.
+        Load printer profiles from QSettings via printing.profiles module.
 
         If no profiles JSON is present, migrate from the legacy single
         printer config (load_printer_settings) into a 'Default' profile.
         """
-        s = self.settings
-        raw = s.value("printer/profiles_json", "", type=str)
+        # Use the centralized profiles module (single source of truth)
+        profile_objs = load_profiles(load_single_fn=self.load_printer_settings)
 
-        profiles: list[dict] = []
-        if raw:
-            try:
-                arr = json.loads(raw)
-                for d in arr:
-                    name = d.get("name") or "Unnamed"
-                    cfg = d.get("config") or {}
-                    profiles.append({"name": name, "config": cfg})
-            except Exception:
-                profiles = []
+        # Convert to list[dict] for internal use (maintains compatibility)
+        self.profiles: list[dict] = [p.to_dict() for p in profile_objs]
 
-        if not profiles:
-            # First run / migration path: wrap existing single config
-            cfg = self.load_printer_settings()
-            name = cfg.get("profile") or "Default"
-            profiles = [{"name": name, "config": cfg}]
+        # Restore active profile by name (persisted across restarts)
+        self.current_profile_index: int = self._restore_active_profile_index()
 
-            try:
-                s.setValue("printer/profiles_json", json.dumps(profiles, indent=2))
-            except Exception:
-                pass
-
-        self.profiles: list[dict] = profiles
-        self.current_profile_index: int = 0
         # Active config is a copy so we can tweak it in-memory
-        self.printer_cfg: dict = dict(self.profiles[0]["config"])
+        if self.profiles:
+            self.printer_cfg: dict = dict(self.profiles[self.current_profile_index]["config"])
+        else:
+            self.printer_cfg: dict = {}
 
     def _save_printer_profiles(self) -> None:
         """
-        Persist all printer profiles to QSettings as JSON.
+        Persist all printer profiles to QSettings via printing.profiles module.
         """
         if not hasattr(self, "profiles"):
             return
 
-        s = self.settings
         try:
-            raw = json.dumps(self.profiles, indent=2)
-            s.setValue("printer/profiles_json", raw)
+            # Convert list[dict] to list[PrinterProfile] for the module
+            profile_objs = [PrinterProfile.from_dict(p) for p in self.profiles]
+            save_profiles(profile_objs)
         except Exception:
-            # Don't crash the app just because JSON failed
+            # Don't crash the app just because save failed
             pass
+
+    def _restore_active_profile_index(self) -> int:
+        """
+        Restore the active profile index by name from QSettings.
+
+        Returns the index of the previously selected profile, or 0 if not found.
+        If the saved profile name no longer exists (renamed/deleted), falls back
+        to the first profile and updates the saved key.
+        """
+        if not self.profiles:
+            return 0
+
+        saved_name = self.settings.value("printer/active_profile_name", "", type=str)
+
+        # Search for a profile with the saved name
+        for idx, profile in enumerate(self.profiles):
+            if profile.get("name", "") == saved_name:
+                return idx
+
+        # Fallback: saved profile not found, use first profile and update the key
+        fallback_name = self.profiles[0].get("name", "")
+        self.settings.setValue("printer/active_profile_name", fallback_name)
+        return 0
 
     def _refresh_profile_combo(self) -> None:
         """
@@ -2455,6 +2870,9 @@ class MainWindow(QtWidgets.QMainWindow):
         name = self.profiles[idx].get("name", "")
         if hasattr(self, "profile_combo"):
             self.profile_combo.setToolTip(name or "Printer profile")
+
+        # Persist active profile name for restore on next startup
+        self.settings.setValue("printer/active_profile_name", name)
 
         # Update darkness spinbox
         if hasattr(self, "sb_darkness"):
@@ -2730,6 +3148,28 @@ class MainWindow(QtWidgets.QMainWindow):
         finally:
             self._layer_refreshing = False
 
+    def _refresh_variable_panel(self) -> None:
+        """Refresh the variable panel to reflect current template variables."""
+        if hasattr(self, "variable_panel") and self.variable_panel is not None:
+            self.variable_panel.refresh_all()
+
+    def _warn_missing_variables(self) -> None:
+        """Show non-blocking status bar warning if template uses undefined variables."""
+        from .variables import scan_used_variables
+
+        try:
+            used = scan_used_variables(self.template)
+            defined = set(self.template.variable_manager.get_all_variables().keys())
+            missing = used - defined
+
+            if missing:
+                names = ", ".join(sorted(missing))
+                self.statusBar().showMessage(
+                    f"Warning: Undefined variables: {names}", 5000
+                )
+        except Exception:
+            pass  # Don't block print/preview on error
+
     def _on_selection_changed(self) -> None:
         if not hasattr(self, "scene") or self.scene is None:
             return
@@ -2763,6 +3203,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # Optional: keep Layers list refreshed on geometry changes
         if hasattr(self, "_refresh_layers_safe"):
             self._refresh_layers_safe()
+
+        # Debounced refresh of used variables (picks up text edits)
+        if hasattr(self, "variable_panel") and self.variable_panel is not None:
+            self.variable_panel.schedule_refresh_used_vars()
     
     def _on_props_element_changed(self, *args) -> None:
         """
@@ -3139,7 +3583,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Calculate column positions
         printable_width = self.template.width_mm - ml - mr
-        start_x = ml * PX_PER_MM
+        start_x = ml * self.template.px_per_mm
         
         # ========== DEBUG OUTPUT START ==========
         print(f"[DEBUG] Printable width: {printable_width}mm")
@@ -3157,8 +3601,8 @@ class MainWindow(QtWidgets.QMainWindow):
             # ========== DEBUG OUTPUT END ==========
             
             for i in range(num_cols + 1):
-                x = start_x + (i * col_width * PX_PER_MM)
-                guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+                x = start_x + (i * col_width * self.template.px_per_mm)
+                guide = GuideLineItem(x, 0, x, self.template.height_px)
                 self.scene.addItem(guide)
                 self._column_guides.append(guide)
                 guide_positions.append(x)
@@ -3168,7 +3612,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 # ========== DEBUG OUTPUT END ==========
         else:
             # Custom width columns
-            col_width_px = custom_width_mm * PX_PER_MM
+            col_width_px = custom_width_mm * self.template.px_per_mm
             x = start_x
             guide_positions.append(x)
             
@@ -3178,15 +3622,15 @@ class MainWindow(QtWidgets.QMainWindow):
             # ========== DEBUG OUTPUT END ==========
             
             # First guide at left margin
-            guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+            guide = GuideLineItem(x, 0, x, self.template.height_px)
             self.scene.addItem(guide)
             self._column_guides.append(guide)
             
             # Add guides for each column
             for i in range(num_cols):
                 x += col_width_px
-                if x < (self.template.width_mm - mr) * PX_PER_MM:  # Don't exceed right margin
-                    guide = GuideLineItem(x, 0, x, self.template.height_mm * PX_PER_MM)
+                if x < (self.template.width_mm - mr) * self.template.px_per_mm:  # Don't exceed right margin
+                    guide = GuideLineItem(x, 0, x, self.template.height_px)
                     self.scene.addItem(guide)
                     self._column_guides.append(guide)
                     guide_positions.append(x)

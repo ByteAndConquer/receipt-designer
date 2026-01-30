@@ -161,7 +161,6 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         {{time:%I:%M %p}}                -> custom time format
         {{datetime}}                      -> YYYY-MM-DD HH:MM
         {{datetime:%b %d, %Y %I:%M %p}}  -> custom datetime format
-        {{id}}                            -> simple placeholder (TEST-001 for now)
         {{year}}                          -> 2026
         {{month}}                         -> 1 (numeric)
         {{month_name}}                    -> January
@@ -227,8 +226,7 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
             "{{date}}": now.strftime("%Y-%m-%d"),
             "{{time}}": now.strftime("%H:%M"),
             "{{datetime}}": now.strftime("%Y-%m-%d %H:%M"),
-            "{{id}}": "TEST-001",   # TODO: real IDs later
-            # NEW: Additional system variables
+            # Additional system variables
             "{{year}}": str(now.year),
             "{{month}}": str(now.month),
             "{{month_name}}": now.strftime("%B"),

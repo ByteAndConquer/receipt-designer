@@ -10,11 +10,12 @@ ICON_DIR = BASE_DIR / "assets" / "icons"            # .../receipt_designer/asset
 
 # Change this to match your actual filename
 ICON_CANDIDATES = [
-    "favicon.ico",
-    "favicon-16x16.png",
-    "favicon-32x32.png",
+    "ReceiptDesigner128x128.ico",
+    "ReceiptDesigner64x64.ico",
+    "ReceiptDesigner32x32.ico",
+    "ReceiptDesigner.png",
+    "favicon.ico",  # keep as a fallback if you want
 ]
-
 
 def _load_app_icon() -> QtGui.QIcon:
     """Try to load an icon from assets/icons."""

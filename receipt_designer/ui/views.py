@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-PX_PER_MM = 8.0   # keep this in sync with your Template width_px/height_px logic
-DPI = 203
+
+# ------------ px/mm conversion helper ------------
+DEFAULT_DPI = 203
+
+def compute_px_per_mm(dpi: int) -> float:
+    """Compute pixels per millimeter from DPI. Use this for consistent px/mm math."""
+    return dpi / 25.4
+
+# Legacy constant for backwards compatibility (use compute_px_per_mm() for new code)
+PX_PER_MM = compute_px_per_mm(DEFAULT_DPI)
 
 
 class RulerView(QtWidgets.QGraphicsView):
@@ -24,8 +32,28 @@ class RulerView(QtWidgets.QGraphicsView):
         self._show_margins = True
         self._panning = False
         self._pan_last_pos = QtCore.QPoint()
-        
+
         self._space_held = False
+        self._dark_mode = False
+
+    # ------------ dark mode toggle ------------
+    def setDarkMode(self, dark: bool):
+        """Set dark mode for canvas appearance."""
+        self._dark_mode = bool(dark)
+        self.viewport().update()
+
+    # ------------ px/mm from scene/template ------------
+    def _get_px_per_mm(self) -> float:
+        """
+        Get px_per_mm from the scene's DPI property, falling back to DEFAULT_DPI.
+        This ensures rulers/margins use the same px/mm as the Template model.
+        """
+        scene = self.scene()
+        if scene is not None:
+            dpi = scene.property("dpi")
+            if dpi is not None and dpi > 0:
+                return compute_px_per_mm(int(dpi))
+        return compute_px_per_mm(DEFAULT_DPI)
 
     # ------------ public toggle used by MainWindow ------------
     def setShowMargins(self, show: bool):
@@ -34,25 +62,34 @@ class RulerView(QtWidgets.QGraphicsView):
 
     # ------------ background: workspace + page outline ------------
     def drawBackground(self, painter: QtGui.QPainter, rect: QtCore.QRectF) -> None:
-        # workspace
-        painter.fillRect(rect, QtGui.QColor("#2b2b2b"))
+        # workspace background (area outside the page)
+        if self._dark_mode:
+            workspace_color = QtGui.QColor("#1a1a1a")
+            page_color = QtGui.QColor("#2d2d2d")
+            border_color = QtGui.QColor("#555555")
+        else:
+            workspace_color = QtGui.QColor("#2b2b2b")
+            page_color = QtCore.Qt.white
+            border_color = QtGui.QColor("#999999")
+
+        painter.fillRect(rect, workspace_color)
 
         if self.scene() is None:
             return
 
         scene_rect = self.sceneRect()
 
-        # white page area (scene coordinates)
+        # page area (scene coordinates)
         page_rect = QtCore.QRectF(
             scene_rect.left(),
             scene_rect.top(),
             scene_rect.width(),
             scene_rect.height(),
         )
-        painter.fillRect(page_rect, QtCore.Qt.white)
+        painter.fillRect(page_rect, page_color)
 
-        # subtle gray border around the paper
-        pen = QtGui.QPen(QtGui.QColor("#999999"))
+        # subtle border around the paper
+        pen = QtGui.QPen(border_color)
         pen.setWidth(1)
         painter.setPen(pen)
         painter.setBrush(QtCore.Qt.NoBrush)
@@ -78,10 +115,11 @@ class RulerView(QtWidgets.QGraphicsView):
                 m_left = m_top = m_right = m_bottom = 4.0
 
             # convert margins mm -> px in scene coordinates
-            ml = m_left * PX_PER_MM
-            mt = m_top * PX_PER_MM
-            mr = m_right * PX_PER_MM
-            mb = m_bottom * PX_PER_MM
+            px_per_mm = self._get_px_per_mm()
+            ml = m_left * px_per_mm
+            mt = m_top * px_per_mm
+            mr = m_right * px_per_mm
+            mb = m_bottom * px_per_mm
 
             margin_rect = QtCore.QRectF(
                 ml,
@@ -90,7 +128,9 @@ class RulerView(QtWidgets.QGraphicsView):
                 paper_h - mt - mb,
             )
 
-            pen = QtGui.QPen(QtGui.QColor("#ff5555"))
+            # Margin line color - brighter in dark mode for visibility
+            margin_color = QtGui.QColor("#ff7777") if self._dark_mode else QtGui.QColor("#ff5555")
+            pen = QtGui.QPen(margin_color)
             pen.setStyle(QtCore.Qt.DashLine)
             pen.setWidth(1)
             painter.setPen(pen)
@@ -143,11 +183,14 @@ class RulerView(QtWidgets.QGraphicsView):
             # we're panned completely off the page
             return
 
+        # Get px_per_mm from template DPI
+        px_per_mm = self._get_px_per_mm()
+
         # Convert those extents to mm (0,0 at top-left of page)
-        start_x_mm = max(0.0, visible_page.left() / PX_PER_MM)
-        end_x_mm = max(0.0, visible_page.right() / PX_PER_MM)
-        start_y_mm = max(0.0, visible_page.top() / PX_PER_MM)
-        end_y_mm = max(0.0, visible_page.bottom() / PX_PER_MM)
+        start_x_mm = max(0.0, visible_page.left() / px_per_mm)
+        end_x_mm = max(0.0, visible_page.right() / px_per_mm)
+        start_y_mm = max(0.0, visible_page.top() / px_per_mm)
+        end_y_mm = max(0.0, visible_page.bottom() / px_per_mm)
 
         # Ruler steps in mm
         major_step_mm = 10.0
@@ -188,7 +231,7 @@ class RulerView(QtWidgets.QGraphicsView):
         first_mm_x = math.floor(start_x_mm / minor_step_mm) * minor_step_mm
         cur_mm = first_mm_x
         while cur_mm <= end_x_mm:
-            x_scene = cur_mm * PX_PER_MM
+            x_scene = cur_mm * px_per_mm
             pt_view = self.mapFromScene(QtCore.QPointF(x_scene, 0))
             x = int(pt_view.x())
 
@@ -220,7 +263,7 @@ class RulerView(QtWidgets.QGraphicsView):
         first_mm_y = math.floor(start_y_mm / minor_step_mm) * minor_step_mm
         cur_mm = first_mm_y
         while cur_mm <= end_y_mm:
-            y_scene = cur_mm * PX_PER_MM
+            y_scene = cur_mm * px_per_mm
             pt_view = self.mapFromScene(QtCore.QPointF(0, y_scene))
             y = int(pt_view.y())
 

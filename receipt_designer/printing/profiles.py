@@ -1,14 +1,14 @@
-# TODO(transport): USB and SERIAL transports require verification and adjustments.
-# Only NETWORK printing has been tested and is known to work at this time.
-# Please update device discovery, timeouts, and write/flush logic for USB/SERIAL.
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import json
 from PySide6.QtCore import QSettings
+
+
+# Storage key (matches main_window_impl.py convention)
+PROFILES_KEY = "printer/profiles_json"
 
 
 @dataclass
@@ -36,12 +36,16 @@ class PrinterProfile:
 
 
 def _settings() -> QSettings:
-    # Use the same org/app you use elsewhere for QSettings.
-    # Adjust if your app uses different strings.
-    return QSettings("ReceiptDesigner", "ReceiptDesigner")
+    """
+    Return QSettings using QCoreApplication org/app names.
+    This respects the app-level setOrganizationName/setApplicationName calls.
+    """
+    return QSettings()
 
 
-def load_profiles(load_single_fn=None) -> List[PrinterProfile]:
+def load_profiles(
+    load_single_fn: Optional[Callable[[], Dict[str, Any]]] = None
+) -> List[PrinterProfile]:
     """
     Load printer profiles from QSettings.
 
@@ -50,7 +54,7 @@ def load_profiles(load_single_fn=None) -> List[PrinterProfile]:
     the legacy single printer_cfg into a 'Default' profile.
     """
     s = _settings()
-    raw = s.value("printer_profiles", "", type=str)
+    raw = s.value(PROFILES_KEY, "", type=str)
 
     if raw:
         try:
@@ -63,11 +67,17 @@ def load_profiles(load_single_fn=None) -> List[PrinterProfile]:
             pass
 
     # Migration / fallback: build a single "Default" profile
-    cfg = load_single_fn() if load_single_fn is not None else None
-    if cfg is None:
-        cfg = {}
+    cfg: Dict[str, Any] = {}
+    name = "Default"
 
-    return [PrinterProfile(name="Default", config=cfg)]
+    if load_single_fn is not None:
+        try:
+            cfg = load_single_fn() or {}
+            name = cfg.get("profile") or "Default"
+        except Exception:
+            cfg = {}
+
+    return [PrinterProfile(name=name, config=cfg)]
 
 
 def save_profiles(profiles: List[PrinterProfile]) -> None:
@@ -76,4 +86,4 @@ def save_profiles(profiles: List[PrinterProfile]) -> None:
     """
     s = _settings()
     raw = json.dumps([p.to_dict() for p in profiles], indent=2)
-    s.setValue("printer_profiles", raw)
+    s.setValue(PROFILES_KEY, raw)

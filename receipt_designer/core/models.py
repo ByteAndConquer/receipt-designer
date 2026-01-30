@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import List, Tuple, Optional, Any, Dict
 import re
 
@@ -60,7 +60,45 @@ class Element:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Element":
-        return Element(**d)
+        """
+        Create an Element from a dict, handling unknown/missing keys gracefully.
+
+        - Unknown keys are preserved in `data` field (forward compatibility)
+        - Missing optional keys use dataclass defaults
+        - Missing required keys (kind, x, y, w, h) use safe fallbacks
+        """
+        # Get the set of valid field names for Element
+        valid_fields = {f.name for f in fields(Element)}
+
+        # Filter to only known fields
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+
+        # Preserve unknown keys in the `data` dict (forward compatibility)
+        # This ensures future/plugin data is not silently lost
+        unknown_keys = {k: v for k, v in d.items() if k not in valid_fields}
+        if unknown_keys:
+            # Merge into existing data dict, or create new one
+            existing_data = filtered.get("data", {}) or {}
+            # Merge unknown keys into existing _unknown dict (don't replace)
+            existing_unknown = existing_data.get("_unknown", {}) or {}
+            existing_unknown.update(unknown_keys)
+            existing_data["_unknown"] = existing_unknown
+            filtered["data"] = existing_data
+
+        # Provide safe defaults for required fields if missing
+        # (These have no defaults in the dataclass, so we must handle them)
+        if "kind" not in filtered:
+            filtered["kind"] = "text"  # Safe default
+        if "x" not in filtered:
+            filtered["x"] = 0.0
+        if "y" not in filtered:
+            filtered["y"] = 0.0
+        if "w" not in filtered:
+            filtered["w"] = 50.0
+        if "h" not in filtered:
+            filtered["h"] = 20.0
+
+        return Element(**filtered)
 
 
 # ---------- Guide/grid models ----------
@@ -79,7 +117,19 @@ class GuideLine:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "GuideLine":
-        return GuideLine(**d)
+        """Create a GuideLine from dict, ignoring unknown keys."""
+        valid_fields = {f.name for f in fields(GuideLine)}
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+        # Provide defaults for required fields
+        if "x1" not in filtered:
+            filtered["x1"] = 0.0
+        if "y1" not in filtered:
+            filtered["y1"] = 0.0
+        if "x2" not in filtered:
+            filtered["x2"] = 0.0
+        if "y2" not in filtered:
+            filtered["y2"] = 0.0
+        return GuideLine(**filtered)
 
 
 @dataclass
@@ -96,7 +146,11 @@ class GuideGrid:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "GuideGrid":
-        return GuideGrid(**d)
+        """Create a GuideGrid from dict, ignoring unknown keys."""
+        valid_fields = {f.name for f in fields(GuideGrid)}
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+        # All GuideGrid fields have defaults, so no required field handling needed
+        return GuideGrid(**filtered)
 
 
 # ---------- Variable Manager ----------
@@ -143,21 +197,27 @@ class VariableManager:
         """
         Resolve user variables in text.
         Format: {{var:variable_name}}
-        
+
         Example:
             text = "Welcome to {{var:store_name}}"
             result = "Welcome to My Store"
+
+        If a variable is not defined, the token is left as-is (e.g., "{{var:unknown}}"
+        remains in the output) to make missing variables visible to the user.
         """
         if not text:
             return text
-        
+
         # Pattern for {{var:name}}
         pattern = r'\{\{var:([a-zA-Z_][a-zA-Z0-9_]*)\}\}'
-        
+
         def replace_var(match):
             var_name = match.group(1)
-            return self.get_variable(var_name)
-        
+            if var_name in self.variables:
+                return self.variables[var_name]
+            # Leave unresolved tokens as literal text so user can see what's missing
+            return match.group(0)
+
         return re.sub(pattern, replace_var, text)
     
     def to_dict(self) -> dict:
@@ -226,11 +286,12 @@ class Template:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Template":
+        # Use same default as dataclass field: (4.0, 0.0, 4.0, 0.0)
         t = Template(
             width_mm=d.get("width_mm", 80.0),
-            height_mm=d.get("height_mm", 75.0),  # FIXED: was .0
+            height_mm=d.get("height_mm", 75.0),
             dpi=d.get("dpi", 203),
-            margins_mm=tuple(d.get("margins_mm", (5.0, 5.0, 5.0, 5.0))),
+            margins_mm=tuple(d.get("margins_mm", (4.0, 0.0, 4.0, 0.0))),
             name=d.get("name", "Untitled"),
             version=d.get("version", "1.0"),
         )

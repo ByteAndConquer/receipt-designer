@@ -178,7 +178,7 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         self.txt_content = QtWidgets.QPlainTextEdit()
         self.txt_content.setPlaceholderText(
-            "Text content (supports {{date}}, {{time}}, {{id}})"
+            "Text content (supports {{date}}, {{time}}, {{var:name}})"
         )
         self.txt_content.textChanged.connect(self._on_text_changed)
         txt_layout.addWidget(self.txt_content)
@@ -1593,7 +1593,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         txt = (self.edit_bc_data.text() or "").strip()
         bc_kind = self.combo_bc_type.currentText() or "Code128"
 
-        # If using {{date}} / {{id}} placeholders, don't hard-fail here
+        # If using {{date}} or other variable placeholders, don't hard-fail here
         if "{{" in txt or "}}" in txt:
             self.lbl_bc_error.hide()
             return
