@@ -36,6 +36,7 @@ class PropertiesPanel(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._main_window = parent  # Reference to main window for inline editor check
         self._current_item: Optional[QtWidgets.QGraphicsItem] = None
         self._current_elem: Optional[Element] = None
         self._updating_ui = False
@@ -122,6 +123,18 @@ class PropertiesPanel(QtWidgets.QWidget):
         if factor <= 0:
             return px
         return px / factor
+
+    def _is_inline_editing_item(self, item) -> bool:
+        """Check if the given item is being edited inline on the canvas."""
+        main_window = self._main_window
+        if main_window is None:
+            return False
+        inline_editor = getattr(main_window, "_inline_editor", None)
+        if inline_editor is None:
+            return False
+        if not inline_editor.isEditing():
+            return False
+        return inline_editor.currentItem() is item
 
     # --------------------- generic property helper ---------------------
 
@@ -595,8 +608,10 @@ class PropertiesPanel(QtWidgets.QWidget):
 
                     # 👉 Only update the editor if the text actually changed,
                     # and preserve the cursor so typing doesn't get wrecked.
+                    # Also skip update if inline canvas editor is active on this item.
+                    inline_editing_this = self._is_inline_editing_item(item)
                     old_text = self.txt_content.toPlainText()
-                    if old_text != text:
+                    if old_text != text and not inline_editing_this:
                         prev_block = self.txt_content.blockSignals(True)
 
                         cursor = self.txt_content.textCursor()

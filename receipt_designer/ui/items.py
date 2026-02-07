@@ -17,6 +17,32 @@ import os
 import math
 import re
 
+
+def compute_display_color(base_color: QtGui.QColor, dark_mode: bool) -> QtGui.QColor:
+    """
+    Compute display color for text, adjusting for dark mode contrast.
+
+    If dark_mode is True and base_color is very dark (low luminance),
+    return a light color for readability. Otherwise return base_color unchanged.
+
+    This is display-only and does not affect stored/printed color.
+    """
+    if not dark_mode:
+        return base_color
+
+    # Calculate luminance using standard formula
+    r, g, b = base_color.red(), base_color.green(), base_color.blue()
+    luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    # If too dark (luma < 40), use light color for visibility
+    if luma < 40:
+        # Preserve alpha if present
+        light_color = QtGui.QColor(240, 240, 240, base_color.alpha())
+        return light_color
+
+    return base_color
+
+
 class ContextMenuMixin:
     """
     Mixin that adds a right-click context menu to scene items.
@@ -136,6 +162,17 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         self._move_start_pos: QtCore.QPointF | None = None
         self._move_start_rect: QtCore.QRectF | None = None
 
+    def _is_dark_mode(self) -> bool:
+        """Check if the view is in dark mode."""
+        scene = self.scene()
+        if scene is None:
+            return False
+        views = scene.views()
+        if not views:
+            return False
+        view = views[0]
+        return bool(getattr(view, "_dark_mode", False))
+
         self.setPen(QtCore.Qt.NoPen)
         self.setBrush(QtCore.Qt.NoBrush)
 
@@ -243,7 +280,7 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
 
 
 
-    def _paint_text(self, painter: QtGui.QPainter, w: int, h: int) -> None:
+    def _paint_text(self, painter: QtGui.QPainter, w: int, h: int, apply_display_contrast: bool = False) -> None:
         # pull properties with safe defaults
         text = self._resolve_text(getattr(self.elem, "text", "") or "")
         family = getattr(self.elem, "font_family", "Arial")
@@ -334,7 +371,23 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
                 f.setPointSize(max(4, final_pt))
 
         painter.setFont(f)
-        painter.setPen(QtCore.Qt.black)
+
+        # Determine text color: use element color if set, else black
+        # Then apply dark mode contrast adjustment for display only (not print)
+        text_color_str = getattr(self.elem, "text_color", None) or getattr(self.elem, "color", None)
+        if text_color_str:
+            base_color = QtGui.QColor(text_color_str)
+            if not base_color.isValid():
+                base_color = QtGui.QColor(QtCore.Qt.black)
+        else:
+            base_color = QtGui.QColor(QtCore.Qt.black)
+
+        # Apply display contrast only when explicitly requested (screen painting in dark mode)
+        if apply_display_contrast:
+            display_color = compute_display_color(base_color, dark_mode=True)
+        else:
+            display_color = base_color
+        painter.setPen(display_color)
 
         # If a max_lines cap is set, use QTextLayout with manual line control
         if max_lines > 0:
@@ -550,7 +603,15 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         painter.drawImage(target_rect, img)
 
     # ---------- cache & paint ----------
-    def _ensure_cache(self):
+    def _ensure_cache(self, for_screen: bool = True):
+        """
+        Build/update the cached QImage for this element.
+
+        Args:
+            for_screen: If True, apply display-only adjustments (e.g., dark mode
+                        contrast inversion). If False, use true/base colors for
+                        printing/export.
+        """
         r = self.rect()
         w = max(1, int(r.width()))
         h = max(1, int(r.height()))
@@ -564,6 +625,8 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         except Exception:
             size = 12
 
+        # Determine if we should apply display contrast (dark mode + for_screen)
+        apply_display_contrast = for_screen and self._is_dark_mode()
 
         key = (
             getattr(self.elem, "kind", "text"),
@@ -587,6 +650,8 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
             bool(getattr(self.elem, "keep_aspect", True)),
             w,
             h,
+            # Include display contrast state in key so screen vs print have separate caches
+            apply_display_contrast,
         )
 
         if key == self._cache_key and self._cache_qimage is not None:
@@ -598,7 +663,7 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         try:
             kind = getattr(self.elem, "kind", "text")
             if kind == "text":
-                self._paint_text(p, w, h)
+                self._paint_text(p, w, h, apply_display_contrast=apply_display_contrast)
             elif kind == "barcode":
                 self._paint_barcode(p, w, h)
             elif kind == "image":
@@ -618,7 +683,9 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget=None,
     ) -> None:
-        self._ensure_cache()
+        # widget is not None when painting to screen; None when rendering to QImage/QPrinter
+        for_screen = widget is not None
+        self._ensure_cache(for_screen=for_screen)
         r = self.rect()
 
         if self._cache_qimage is not None:
@@ -773,6 +840,27 @@ class GItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
 
         self._move_start_pos = None
         self._move_start_rect = None
+
+    def mouseDoubleClickEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        """Start in-place text editing on double-click for text elements."""
+        kind = getattr(self.elem, "kind", "")
+        if kind != "text":
+            super().mouseDoubleClickEvent(event)
+            return
+
+        # Get the main window to access the inline editor
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            super().mouseDoubleClickEvent(event)
+            return
+
+        # Start inline editing if available
+        if hasattr(main_window, "_inline_editor") and main_window._inline_editor is not None:
+            if main_window._inline_editor.startEditing(self):
+                event.accept()
+                return
+
+        super().mouseDoubleClickEvent(event)
 
     def itemChange(
         self,
@@ -1147,6 +1235,36 @@ class GLineItem(ContextMenuMixin, QtWidgets.QGraphicsLineItem):
         self._resize_old_line = None
         self._resize_which = None
 
+    def to_element(self) -> Element:
+        """
+        Convert this line item to an Element for serialization.
+        Captures position (via line endpoints + scene pos), stroke style, z-order.
+        """
+        ln = self.line()
+        pos = self.pos()
+        # Store absolute scene coordinates for endpoints
+        x1 = pos.x() + ln.p1().x()
+        y1 = pos.y() + ln.p1().y()
+        x2 = pos.x() + ln.p2().x()
+        y2 = pos.y() + ln.p2().y()
+
+        pen = self.pen()
+        stroke_color = pen.color().name()
+        stroke_px = pen.widthF()
+
+        return Element(
+            kind="line",
+            x=x1,
+            y=y1,
+            w=x2 - x1,  # Store delta as w for reconstruction
+            h=y2 - y1,  # Store delta as h for reconstruction
+            stroke_color=stroke_color,
+            stroke_px=stroke_px,
+            z=int(self.zValue()),
+            visible=self.isVisible(),
+        )
+
+
 class GArrowItem(GLineItem):
     """
     Arrow shape based on GLineItem:
@@ -1236,6 +1354,19 @@ class GArrowItem(GLineItem):
 
         poly = QtGui.QPolygonF([tip, p_left, p_right])
         painter.drawPolygon(poly)
+
+    def to_element(self) -> Element:
+        """
+        Convert this arrow item to an Element for serialization.
+        Extends GLineItem's to_element with arrow-specific properties.
+        """
+        elem = super().to_element()
+        elem.kind = "arrow"
+        # Store arrow-specific properties in data dict
+        elem.data["arrow_length_px"] = self.arrow_length_px
+        elem.data["arrow_width_px"] = self.arrow_width_px
+        elem.data["arrow_at_start"] = self.arrow_at_start
+        return elem
 
 
 class BaseShapeItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
@@ -1380,6 +1511,37 @@ class BaseShapeItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
         self._move_start_pos = None
         self._move_start_rect = None
 
+    def _get_shape_kind(self) -> str:
+        """Return the kind string for this shape. Subclasses override."""
+        return "rect"  # Default, but subclasses should override
+
+    def to_element(self) -> Element:
+        """
+        Convert this shape item to an Element for serialization.
+        Works for BaseShapeItem and subclasses (ellipse, diamond).
+        """
+        pos = self.pos()
+        r = self.rect()
+        pen = self.pen()
+        brush = self.brush()
+
+        fill_color = brush.color().name() if brush.style() != QtCore.Qt.NoBrush else ""
+        stroke_color = pen.color().name()
+        stroke_px = pen.widthF()
+
+        return Element(
+            kind=self._get_shape_kind(),
+            x=pos.x() + r.x(),
+            y=pos.y() + r.y(),
+            w=r.width(),
+            h=r.height(),
+            stroke_color=stroke_color,
+            stroke_px=stroke_px,
+            fill_color=fill_color,
+            z=int(self.zValue()),
+            visible=self.isVisible(),
+        )
+
 
 class GRectItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
     """
@@ -1510,6 +1672,37 @@ class GRectItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
             return
         super().mouseReleaseEvent(event)
 
+    def to_element(self) -> Element:
+        """
+        Convert this rect item to an Element for serialization.
+        Includes corner_radius_px and pill_mode.
+        """
+        pos = self.pos()
+        r = self.rect()
+        pen = self.pen()
+        brush = self.brush()
+
+        fill_color = brush.color().name() if brush.style() != QtCore.Qt.NoBrush else ""
+        stroke_color = pen.color().name()
+        stroke_px = pen.widthF()
+
+        elem = Element(
+            kind="rect",
+            x=pos.x() + r.x(),
+            y=pos.y() + r.y(),
+            w=r.width(),
+            h=r.height(),
+            stroke_color=stroke_color,
+            stroke_px=stroke_px,
+            fill_color=fill_color,
+            corner_radius_px=self.corner_radius_px,
+            z=int(self.zValue()),
+            visible=self.isVisible(),
+        )
+        # Store pill_mode in data dict
+        if self.pill_mode:
+            elem.data["pill_mode"] = True
+        return elem
 
 
 class GEllipseItem(BaseShapeItem):
@@ -1521,6 +1714,9 @@ class GEllipseItem(BaseShapeItem):
         if rect is None:
             rect = QtCore.QRectF(0.0, 0.0, 50.0, 50.0)
         super().__init__(rect)
+
+    def _get_shape_kind(self) -> str:
+        return "ellipse"
 
     def _paint_shape(self, painter: QtGui.QPainter) -> None:
         painter.setPen(self.pen())
@@ -1678,6 +1874,36 @@ class GStarItem(ContextMenuMixin, QtWidgets.QGraphicsRectItem):
             return
         super().mouseReleaseEvent(event)
 
+    def to_element(self) -> Element:
+        """
+        Convert this star item to an Element for serialization.
+        Includes star_points property.
+        """
+        pos = self.pos()
+        r = self.rect()
+        pen = self.pen()
+        brush = self.brush()
+
+        fill_color = brush.color().name() if brush.style() != QtCore.Qt.NoBrush else ""
+        stroke_color = pen.color().name()
+        stroke_px = pen.widthF()
+
+        elem = Element(
+            kind="star",
+            x=pos.x() + r.x(),
+            y=pos.y() + r.y(),
+            w=r.width(),
+            h=r.height(),
+            stroke_color=stroke_color,
+            stroke_px=stroke_px,
+            fill_color=fill_color,
+            z=int(self.zValue()),
+            visible=self.isVisible(),
+        )
+        elem.data["star_points"] = self.star_points
+        return elem
+
+
 class GDiamondItem(BaseShapeItem):
     """
     Diamond shape: drawn inside its rect as a rotated square (diamond).
@@ -1697,6 +1923,9 @@ class GDiamondItem(BaseShapeItem):
         pen.setWidthF(1.3)
         self.setPen(pen)
         self.setBrush(QtCore.Qt.NoBrush)
+
+    def _get_shape_kind(self) -> str:
+        return "diamond"
 
     def _paint_shape(self, painter: QtGui.QPainter) -> None:
         r = self.rect()
@@ -1743,3 +1972,162 @@ class GuideLineItem(ContextMenuMixin, QtWidgets.QGraphicsLineItem):
         self.setFlag(QtWidgets.QGraphicsItem.ItemIsMovable, False)
         self.setZValue(9999)  # Always draw on top of everything
         self.setAcceptedMouseButtons(QtCore.Qt.NoButton)  # Don't capture mouse clicks
+
+
+# ---------- Factory function for creating items from Element ----------
+
+def create_item_from_element(elem: Element):
+    """
+    Factory function to create the appropriate graphics item from an Element.
+
+    Supports all element kinds:
+    - text, image, barcode, qr -> GItem
+    - line -> GLineItem
+    - arrow -> GArrowItem
+    - rect -> GRectItem
+    - ellipse -> GEllipseItem
+    - star -> GStarItem
+    - diamond -> GDiamondItem
+
+    Returns the created item (not yet added to scene).
+    """
+    kind = getattr(elem, "kind", "text")
+
+    if kind in ("text", "image", "barcode", "qr"):
+        # These all use GItem
+        item = GItem(elem)
+        item.setPos(elem.x, elem.y)
+        return item
+
+    elif kind == "line":
+        # Reconstruct line from stored x,y (p1) and w,h (delta to p2)
+        p1 = QtCore.QPointF(0, 0)
+        p2 = QtCore.QPointF(elem.w, elem.h)
+        item = GLineItem(p1, p2)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+        return item
+
+    elif kind == "arrow":
+        # Reconstruct arrow from stored x,y (p1) and w,h (delta to p2)
+        p1 = QtCore.QPointF(0, 0)
+        p2 = QtCore.QPointF(elem.w, elem.h)
+        item = GArrowItem(p1, p2)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+
+        # Arrow-specific properties from data dict
+        data = elem.data or {}
+        item.arrow_length_px = data.get("arrow_length_px", 10.0)
+        item.arrow_width_px = data.get("arrow_width_px", 6.0)
+        item.arrow_at_start = data.get("arrow_at_start", False)
+        return item
+
+    elif kind == "rect":
+        rect = QtCore.QRectF(0, 0, elem.w, elem.h)
+        item = GRectItem(rect)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+
+        if elem.fill_color:
+            item.setBrush(QtGui.QBrush(QtGui.QColor(elem.fill_color)))
+        else:
+            item.setBrush(QtCore.Qt.NoBrush)
+
+        item.corner_radius_px = elem.corner_radius_px
+        item.pill_mode = (elem.data or {}).get("pill_mode", False)
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+        return item
+
+    elif kind == "ellipse":
+        rect = QtCore.QRectF(0, 0, elem.w, elem.h)
+        item = GEllipseItem(rect)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+
+        if elem.fill_color:
+            item.setBrush(QtGui.QBrush(QtGui.QColor(elem.fill_color)))
+        else:
+            item.setBrush(QtCore.Qt.NoBrush)
+
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+        return item
+
+    elif kind == "star":
+        rect = QtCore.QRectF(0, 0, elem.w, elem.h)
+        star_points = (elem.data or {}).get("star_points", 5)
+        item = GStarItem(rect, points=star_points)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+
+        if elem.fill_color:
+            item.setBrush(QtGui.QBrush(QtGui.QColor(elem.fill_color)))
+        else:
+            item.setBrush(QtCore.Qt.NoBrush)
+
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+        return item
+
+    elif kind == "diamond":
+        rect = QtCore.QRectF(0, 0, elem.w, elem.h)
+        item = GDiamondItem(rect)
+        item.setPos(elem.x, elem.y)
+
+        # Apply style
+        pen = QtGui.QPen(QtGui.QColor(elem.stroke_color or "#000000"))
+        pen.setWidthF(elem.stroke_px if elem.stroke_px > 0 else 1.0)
+        item.setPen(pen)
+
+        if elem.fill_color:
+            item.setBrush(QtGui.QBrush(QtGui.QColor(elem.fill_color)))
+        else:
+            item.setBrush(QtCore.Qt.NoBrush)
+
+        item.setZValue(elem.z)
+        item.setVisible(elem.visible)
+        return item
+
+    else:
+        # Unknown kind - fall back to GItem with text placeholder
+        item = GItem(elem)
+        item.setPos(elem.x, elem.y)
+        return item
+
+
+# Convenience: list of all serializable item types (for isinstance checks)
+SERIALIZABLE_ITEM_TYPES = (
+    GItem,
+    GLineItem,
+    GArrowItem,
+    GRectItem,
+    GEllipseItem,
+    GStarItem,
+    GDiamondItem,
+)

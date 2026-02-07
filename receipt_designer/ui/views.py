@@ -15,6 +15,9 @@ PX_PER_MM = compute_px_per_mm(DEFAULT_DPI)
 
 
 class RulerView(QtWidgets.QGraphicsView):
+    # Signal emitted when the view transform changes (zoom/pan)
+    viewTransformChanged = QtCore.Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -330,6 +333,7 @@ class RulerView(QtWidgets.QGraphicsView):
 
             zoom_factor = 1.2 if angle > 0 else 1 / 1.2
             self.scale(zoom_factor, zoom_factor)
+            self.viewTransformChanged.emit()
         else:
             super().wheelEvent(event)
 

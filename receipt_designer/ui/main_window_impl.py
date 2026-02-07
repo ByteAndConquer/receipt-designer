@@ -22,12 +22,15 @@ from .items import (
     GArrowItem,
     GuideGridItem,
     GDiamondItem,
+    create_item_from_element,
+    SERIALIZABLE_ITEM_TYPES,
 )
 from .layers import LayerList
 from .views import RulerView, PX_PER_MM
 from .toolbox import Toolbox
 from .properties import PropertiesPanel
 from .variables import VariablePanel
+from .inline_editor import CanvasTextEditorOverlay
 
 
 # -------------------------
@@ -36,6 +39,9 @@ from .variables import VariablePanel
 ORG_NAME = "ByteSized Labs"
 APP_NAME = "Receipt Lab"
 APP_VERSION = "0.9.5"
+
+# Debug flag for autosave/recovery troubleshooting (set to True for debugging)
+DEBUG_AUTOSAVE = False
 
 QtCore.QCoreApplication.setOrganizationName(ORG_NAME)
 QtCore.QCoreApplication.setApplicationName(APP_NAME)
@@ -164,6 +170,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
 
         self._build_scene_view()
+        self._setup_inline_editor()
         self._build_toolbars_menus()
         self._build_docks()
         self._update_view_menu()
@@ -208,6 +215,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         self.scene.changed.connect(self._mark_unsaved)
+
+    def _setup_inline_editor(self):
+        """Set up the in-place text editor for canvas elements."""
+        self._inline_editor = CanvasTextEditorOverlay(self.view)
+
+        # Update editor geometry when view scrolls or zooms
+        self.view.horizontalScrollBar().valueChanged.connect(
+            self._inline_editor.updateGeometry
+        )
+        self.view.verticalScrollBar().valueChanged.connect(
+            self._inline_editor.updateGeometry
+        )
+        self.view.viewTransformChanged.connect(
+            self._inline_editor.updateGeometry
+        )
 
     def _build_toolbars_menus(self):
         # ---- Undo/Redo ----
@@ -1685,10 +1707,15 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # ========== Patch 9: Collect elements with error handling ==========
         try:
+            # Collect ALL serializable item types
             elements = []
             for it in self.scene.items():
-                if isinstance(it, GItem):
-                    elements.append(it.elem.to_dict())
+                if isinstance(it, SERIALIZABLE_ITEM_TYPES):
+                    # GItem has .elem, shape items have .to_element()
+                    if hasattr(it, "elem"):
+                        elements.append(it.elem.to_dict())
+                    elif hasattr(it, "to_element"):
+                        elements.append(it.to_element().to_dict())
 
             # Make asset paths portable (relative where possible)
             elements = self._make_elements_portable(elements, path)
@@ -1750,6 +1777,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_recent_files(path)
         self._current_file_path = path
         self._has_unsaved_changes = False
+
+        # Delete autosave file after successful manual save (no longer needed for recovery)
+        self._delete_autosave_file()
 
     def load_template(self):
         """Load template from file with improved error handling"""
@@ -1844,11 +1874,12 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.scene.clear()
             for e in self.template.elements:
-                item = GItem(e)
+                # Use factory to create correct item type based on elem.kind
+                item = create_item_from_element(e)
                 item.undo_stack = self.undo_stack
-                item._main_window = self 
+                if hasattr(item, "_main_window"):
+                    item._main_window = self
                 self.scene.addItem(item)
-                item.setPos(e.x, e.y)
 
             self.update_paper()
             self._refresh_layers_safe()
@@ -1878,10 +1909,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _auto_save(self):
         """Auto-save current template to temp location every 60 seconds"""
+        if DEBUG_AUTOSAVE:
+            print(f"[AUTOSAVE DEBUG] _auto_save called: _has_unsaved_changes={self._has_unsaved_changes}, scene.items()={len(self.scene.items())}")
+
         if not self._has_unsaved_changes:
+            if DEBUG_AUTOSAVE:
+                print("[AUTOSAVE DEBUG] Skipping autosave: no unsaved changes")
             return  # Nothing has changed since last save
-        
+
         if not self.scene.items():
+            if DEBUG_AUTOSAVE:
+                print("[AUTOSAVE DEBUG] Skipping autosave: no items in scene")
             return  # Nothing to save
         
         temp_dir = QtCore.QStandardPaths.writableLocation(
@@ -1895,11 +1933,15 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # ========== Patch 9: Serialization with specific error handling ==========
         try:
-            # Collect elements from scene
+            # Collect elements from scene - ALL serializable item types
             elements = []
             for it in self.scene.items():
-                if isinstance(it, GItem):
-                    elements.append(it.elem.to_dict())
+                if isinstance(it, SERIALIZABLE_ITEM_TYPES):
+                    # GItem has .elem, shape items have .to_element()
+                    if hasattr(it, "elem"):
+                        elements.append(it.elem.to_dict())
+                    elif hasattr(it, "to_element"):
+                        elements.append(it.to_element().to_dict())
 
             # Make asset paths portable if we have a saved template path
             # (allows recovery to work correctly when moved to another machine)
@@ -1945,6 +1987,12 @@ class MainWindow(QtWidgets.QMainWindow):
             # Atomically replace the final file (Windows-safe)
             os.replace(tmp_path, autosave_path)
 
+            if DEBUG_AUTOSAVE:
+                elem_count = len(elements)
+                kinds = [e.get("kind", "?") for e in elements]
+                print(f"[AUTOSAVE DEBUG] Autosave written successfully to: {autosave_path}")
+                print(f"[AUTOSAVE DEBUG] Saved {elem_count} elements: {kinds}")
+
             # Brief status update on success
             self.statusBar().showMessage("Auto-saved", 2000)
 
@@ -1968,11 +2016,32 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QStandardPaths.TempLocation
         )
         if not temp_dir:
+            if DEBUG_AUTOSAVE:
+                print("[AUTOSAVE DEBUG] No temp dir available")
             return
-        
+
         autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
-        
+
+        if DEBUG_AUTOSAVE:
+            print(f"[AUTOSAVE DEBUG] Checking for autosave at: {autosave_path}")
+            print(f"[AUTOSAVE DEBUG] File exists: {os.path.exists(autosave_path)}")
+            if os.path.exists(autosave_path):
+                import datetime
+                mtime = os.path.getmtime(autosave_path)
+                mtime_str = datetime.datetime.fromtimestamp(mtime).isoformat()
+                print(f"[AUTOSAVE DEBUG] File modified time: {mtime_str}")
+                try:
+                    with open(autosave_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    elem_count = len(data.get("elements", []))
+                    kinds = [e.get("kind", "?") for e in data.get("elements", [])]
+                    print(f"[AUTOSAVE DEBUG] Element count: {elem_count}, kinds: {kinds}")
+                except Exception as e:
+                    print(f"[AUTOSAVE DEBUG] Error reading autosave: {e}")
+
         if not os.path.exists(autosave_path):
+            if DEBUG_AUTOSAVE:
+                print("[AUTOSAVE DEBUG] No autosave file found, skipping recovery")
             return
         
         # Ask user if they want to restore
@@ -1985,6 +2054,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         
         if reply == QtWidgets.QMessageBox.Yes:
+            recovery_succeeded = False
             try:
                 with open(autosave_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -1997,33 +2067,77 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._current_file_path = original_path
 
                 self.template = Template.from_dict(data)
-                
-                # Clear scene and rebuild
+
+                # Clear scene and rebuild using factory for correct item types
                 self.scene.clear()
                 for e in self.template.elements:
-                    item = GItem(e)
+                    item = create_item_from_element(e)
                     item.undo_stack = self.undo_stack
-                    item._main_window = self
+                    if hasattr(item, "_main_window"):
+                        item._main_window = self
                     self.scene.addItem(item)
-                    item.setPos(e.x, e.y)
-                
+
                 self.update_paper()
                 self._refresh_layers_safe()
                 self._refresh_variable_panel()
                 self.statusBar().showMessage("Auto-saved work restored", 3000)
-                
-            except Exception as e:
+                recovery_succeeded = True
+
+            except json.JSONDecodeError as e:
+                # Invalid JSON - keep file for inspection, rename with .bad suffix
+                bad_path = autosave_path + ".bad"
+                try:
+                    os.replace(autosave_path, bad_path)
+                    if DEBUG_AUTOSAVE:
+                        print(f"[AUTOSAVE DEBUG] Renamed corrupt autosave to: {bad_path}")
+                except Exception:
+                    pass
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Recovery Failed",
-                    f"Could not restore auto-saved file: {e}"
+                    f"Auto-save file is corrupted (invalid JSON):\n{e}\n\n"
+                    f"The file has been renamed to:\n{bad_path}"
                 )
-        
-        # Delete auto-save file after handling (whether accepted or not)
+            except Exception as e:
+                # Other errors - keep file for inspection, rename with .bad suffix
+                bad_path = autosave_path + ".bad"
+                try:
+                    os.replace(autosave_path, bad_path)
+                    if DEBUG_AUTOSAVE:
+                        print(f"[AUTOSAVE DEBUG] Renamed failed autosave to: {bad_path}")
+                except Exception:
+                    pass
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Recovery Failed",
+                    f"Could not restore auto-saved file:\n{e}\n\n"
+                    f"The file has been renamed to:\n{bad_path}"
+                )
+
+            # Only delete autosave on successful recovery
+            if recovery_succeeded:
+                self._delete_autosave_file()
+        else:
+            # User declined - delete autosave file to avoid re-prompt
+            self._delete_autosave_file()
+
+    def _delete_autosave_file(self):
+        """Delete the autosave file if it exists."""
+        temp_dir = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.TempLocation
+        )
+        if not temp_dir:
+            return
+
+        autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
         try:
-            os.remove(autosave_path)
-        except:
-            pass
+            if os.path.exists(autosave_path):
+                os.remove(autosave_path)
+                if DEBUG_AUTOSAVE:
+                    print(f"[AUTOSAVE DEBUG] Deleted autosave file: {autosave_path}")
+        except Exception as e:
+            if DEBUG_AUTOSAVE:
+                print(f"[AUTOSAVE DEBUG] Failed to delete autosave file: {e}")
 
     # ------------ Recent Files Helpers ------------
 
@@ -2413,12 +2527,13 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.scene.clear()
             for e in self.template.elements:
-                item = GItem(e)
+                # Use factory to create correct item type based on elem.kind
+                item = create_item_from_element(e)
                 item.undo_stack = self.undo_stack
-                item._main_window = self
+                if hasattr(item, "_main_window"):
+                    item._main_window = self
                 self.scene.addItem(item)
-                item.setPos(e.x, e.y)
-            
+
             self.update_paper()
             self._refresh_layers_safe()
             self._refresh_variable_panel()
@@ -4494,6 +4609,13 @@ class MainWindow(QtWidgets.QMainWindow):
         worker.start()
 
     def closeEvent(self, e: QtGui.QCloseEvent):
+        # Force autosave on close if there are unsaved changes
+        # This ensures recovery works even if timer hasn't fired yet
+        if self._has_unsaved_changes:
+            if DEBUG_AUTOSAVE:
+                print("[AUTOSAVE DEBUG] Forcing autosave on close due to unsaved changes")
+            self._auto_save()
+
         try:
             for w in list(self._workers):
                 try:

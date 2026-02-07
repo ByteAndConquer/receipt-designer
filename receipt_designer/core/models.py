@@ -9,7 +9,7 @@ import re
 @dataclass
 class Element:
     # geometry
-    kind: str                       # "text" | "image" | "qr" | "barcode" | "rect" | "ellipse" | "line"
+    kind: str                       # "text" | "image" | "qr" | "barcode" | "rect" | "ellipse" | "line" | "arrow" | "star" | "diamond"
     x: float
     y: float
     w: float
