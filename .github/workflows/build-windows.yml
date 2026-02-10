@@ -31,10 +31,16 @@ jobs:
           pip install -r requirements-dev.txt
           pip install pyinstaller
 
+      # ✅ Make repo root importable as a package for pytest collection
+      - name: Add repo to PYTHONPATH
+        shell: pwsh
+        run: |
+          "PYTHONPATH=$env:GITHUB_WORKSPACE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Run tests
         shell: pwsh
         run: |
-          pytest -v
+          python -m pytest -v
 
       - name: Build exe (PyInstaller)
         shell: pwsh
