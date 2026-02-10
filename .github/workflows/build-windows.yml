@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write  # needed only for attaching assets to Releases on tag pushes
+  contents: write
 
 jobs:
   build-windows:
@@ -31,7 +31,6 @@ jobs:
           pip install -r requirements-dev.txt
           pip install pyinstaller
 
-      # ✅ Make repo root importable as a package for pytest collection
       - name: Add repo to PYTHONPATH
         shell: pwsh
         run: |
@@ -57,4 +56,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: Receipt Designer ${{ github.ref_name }}
           files: dist/ReceiptDesigner.exe
+          fail_on_unmatched_files: true
