@@ -2,32 +2,30 @@
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-*.so
 *.egg-info/
-.env
+*.egg
+dist/
+build/
+
+# Virtual environments
 .venv/
 venv/
-.envrc
+env/
 
-# Build & Packaging
-build/
-dist/
-*.spec
-*.log
-
-# PyInstaller
-*.manifest
-*.spec
-
-# IDEs & OS
-.vscode/
-.idea/
-*.iml
-.DS_Store
-Thumbs.db
-
-# Tests & Coverage
-.coverage
-htmlcov/
+# Testing
 .pytest_cache/
+
+# PyInstaller (keep ReceiptDesigner.spec committed)
+*.manifest
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store

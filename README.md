@@ -32,13 +32,44 @@ A visual template editor for thermal receipts and labels. Built with PySide6, it
 
 ## Quick Start
 
-**Requirements**: Python 3.10+, PySide6
+**Requirements**: Python 3.10+
 
 ```bash
-pip install PySide6 python-barcode qrcode
+# Install all runtime dependencies
+pip install -r requirements.txt
 
-python -m receipt_designer.app
+# Run the application
+python -m receipt_designer
+# or
+python run_receipt_designer.py
 ```
+
+For development (adds pytest):
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+## Tests
+
+```bash
+# Unit tests
+pytest -v
+
+# Include Qt/GUI integration tests
+# PowerShell:
+$env:RUN_QT_TESTS="1"; pytest -v
+# CMD:
+set RUN_QT_TESTS=1 && pytest -v
+```
+
+## Build
+
+```bash
+pyinstaller ReceiptDesigner.spec
+```
+
+Produces a single-file executable at `dist/ReceiptDesigner.exe`.
 
 ## How It Works
 
@@ -48,6 +79,9 @@ Supported backends:
 - **Network** — raw socket to port 9100
 - **USB** — direct via pyusb
 - **Serial** — RS-232 via pyserial
+- **ESC/POS** — high-level thermal printer protocol via python-escpos
+
+Barcode generation uses python-barcode (1D) and qrcode (QR). Advanced 2D symbologies (PDF417, DataMatrix, Aztec) use treepoem, which requires [Ghostscript](https://ghostscript.com/) installed and on PATH.
 
 ## Data & Persistence
 
@@ -73,4 +107,4 @@ Supported backends:
 
 ## License
 
-MIT — see [LICENSE](./LICENSE) for details.
+MIT — see [LICENSE.md](./LICENSE.md) for details.

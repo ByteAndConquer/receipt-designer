@@ -1,8 +1,18 @@
-PySide6>=6.7
-Pillow>=10.0
+# Receipt Designer - Runtime Dependencies
+# Install: pip install -r requirements.txt
+
+# ── Core (required) ──────────────────────────────────────────────
+PySide6>=6.5
+
+# ── Barcode / QR generation (recommended) ────────────────────────
+Pillow>=9.0
 python-barcode>=0.15
-qrcode[pil]>=7.4
-pyserial>=3.5
-pyusb>=1.2
-python-escpos>=2.2
-treepoem>=3.23
+qrcode>=7.0
+
+# ── Printing ─────────────────────────────────────────────────────
+pyserial>=3.5              # Serial printers
+pyusb>=1.2                 # USB printers
+python-escpos>=3.0         # ESC/POS thermal printers
+
+# ── Advanced 2D barcodes (also needs Ghostscript on PATH) ────────
+treepoem>=3.0
