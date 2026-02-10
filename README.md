@@ -108,3 +108,6 @@ Barcode generation uses python-barcode (1D) and qrcode (QR). Advanced 2D symbolo
 ## License
 
 MIT — see [LICENSE.md](./LICENSE.md) for details.
+
+---
+Built with GitHub Actions (tagged releases publish ReceiptDesigner.exe).
