@@ -1,0 +1,88 @@
+name: "🐛 Bug report"
+description: Report something that isn’t working
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the form as completely as you can.
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: "What version of Receipt Designer? (ex: v0.9.5)"
+      placeholder: "v0.9.5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Packaged EXE (PyInstaller)
+        - From source (python -m receipt_designer)
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly.
+      placeholder: "When I click Print, the app…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: "I expected it to…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Be specific — step-by-step.
+      placeholder: |
+        1. Open…
+        2. Click…
+        3. See error…
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste stack traces or console output, if any.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Screenshots, template file snippets, printer model, etc.
+    validations:
+      required: false

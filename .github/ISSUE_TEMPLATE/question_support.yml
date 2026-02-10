@@ -1,0 +1,67 @@
+name: "❓ Question / support"
+description: Ask a how-to question or get help troubleshooting
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Need help? You’re in the right place. Please include enough detail for someone to reproduce your setup.
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: "What version are you using? (ex: v0.9.5)"
+      placeholder: "v0.9.5"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: false
+
+  - type: dropdown
+    id: run_mode
+    attributes:
+      label: How are you running it?
+      options:
+        - Packaged EXE (PyInstaller)
+        - From source (python -m receipt_designer)
+        - Other / not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      placeholder: "How do I…?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_tried
+    attributes:
+      label: What have you tried so far?
+      placeholder: "I tried X, Y, Z…"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (if relevant)
+      description: Paste any console output or screenshots that help.
+      render: text
+    validations:
+      required: false
