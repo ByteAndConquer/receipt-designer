@@ -105,9 +105,10 @@ Barcode generation uses python-barcode (1D) and qrcode (QR). Advanced 2D symbolo
 
 4. **Recent files deduplication** — Open the same template using different path casings (e.g., `C:\Foo\template.json` vs `c:\foo\TEMPLATE.json`). Only one entry should appear in the Recent Files menu.
 
+## Security
+
+To report a vulnerability, please see [SECURITY.md](./SECURITY.md). Do not open a public issue for security reports.
+
 ## License
 
 MIT — see [LICENSE.md](./LICENSE.md) for details.
-
----
-Built with GitHub Actions (tagged releases publish ReceiptDesigner.exe).
