@@ -56,8 +56,12 @@ python -m pip install -r requirements.txt        # runtime
 python -m pip install -r requirements-dev.txt    # adds pytest
 ```
 
-There is no `pyproject.toml` or `setup.py`; the project is run directly from
-source, not installed as an editable package.
+For advanced 2D barcode support (PDF417, DataMatrix, Aztec), also install
+treepoem (requires [Ghostscript](https://ghostscript.com/) on PATH):
+
+```bash
+python -m pip install treepoem
+```
 
 ## Running the app
 

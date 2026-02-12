@@ -50,18 +50,32 @@ For development (adds pytest):
 pip install -r requirements-dev.txt
 ```
 
+### Optional: Advanced 2D Barcodes
+
+For PDF417, DataMatrix, and Aztec barcode support, install [treepoem](https://pypi.org/project/treepoem/) and [Ghostscript](https://ghostscript.com/):
+
+```bash
+pip install treepoem
+```
+
+Ghostscript must also be installed and available on PATH.
+
 ## Tests
 
 ```bash
-# Unit tests
+# Unit tests (no display needed)
 pytest -v
 
-# Include Qt/GUI integration tests
+# Include Qt/GUI integration + UI smoke tests (offscreen, headless-safe)
 # PowerShell:
 $env:RUN_QT_TESTS="1"; pytest -v
 # CMD:
 set RUN_QT_TESTS=1 && pytest -v
+# Bash:
+RUN_QT_TESTS=1 pytest -v
 ```
+
+UI smoke tests (`tests/test_ui_smoke.py`) verify import health, MainWindow construction, menu/toolbar wiring, and dock widget placement without any GUI interaction. They run in offscreen mode and are gated behind `RUN_QT_TESTS=1`.
 
 ## Build
 
@@ -81,7 +95,22 @@ Supported backends:
 - **Serial** — RS-232 via pyserial
 - **ESC/POS** — high-level thermal printer protocol via python-escpos
 
-Barcode generation uses python-barcode (1D) and qrcode (QR). Advanced 2D symbologies (PDF417, DataMatrix, Aztec) use treepoem, which requires [Ghostscript](https://ghostscript.com/) installed and on PATH.
+Barcode generation uses python-barcode (1D) and qrcode (QR). Advanced 2D symbologies (PDF417, DataMatrix, Aztec) optionally use treepoem, which requires [Ghostscript](https://ghostscript.com/) installed and on PATH. See **Optional: Advanced 2D Barcodes** above for install instructions.
+
+## UI Architecture Overview
+
+The `receipt_designer/ui/` package uses a **coordinator + extracted-module** pattern. `MainWindow` (`main_window_impl.py`) is the central coordinator; cohesive feature blocks are extracted into standalone modules that receive the window instance as their first argument (`mw`).
+
+Key modules:
+- **`actions.py`** — toolbar, menu, and keyboard shortcut wiring
+- **`docks/`** — dock widget builders (layers, properties, variables, toolbox)
+- **`canvas/controller.py`** — scene/view creation and paper-size management
+- **`dialogs/`** — standalone dialog classes (print preview, printer config, etc.)
+- **`persistence.py`** — save, load, autosave, crash recovery, recent files
+- **`presets.py`** — layout preset definitions and fortune-cookie helper
+- **`layout_ops.py`** — align, distribute, group, z-order, lock, nudge, duplicate
+
+Typing guardrails in `host_protocols.py` define `Protocol` classes that document which `mw` attributes each module uses, catching attribute-name drift at type-check time. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full decision guide.
 
 ## Data & Persistence
 

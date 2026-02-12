@@ -3,6 +3,8 @@ from __future__ import annotations
 import socket
 from typing import Optional
 
+from .exceptions import PrinterConnectionError, PrinterConfigError, map_exception
+
 try:
     import serial  # pyserial
 except Exception:
@@ -27,15 +29,18 @@ class NetworkBackend(BaseBackend):
         self.timeout = float(timeout)
 
     def send(self, data: bytes) -> None:
-        with socket.create_connection((self.host, self.port), timeout=self.timeout) as s:
-            s.settimeout(self.timeout)
-            s.sendall(data)
+        try:
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as s:
+                s.settimeout(self.timeout)
+                s.sendall(data)
+        except Exception as exc:
+            raise map_exception(exc) from exc
 
 
 class SerialBackend(BaseBackend):
     def __init__(self, port: str, baudrate: int = 19200, timeout: float = 2.0):
         if serial is None:
-            raise RuntimeError(
+            raise PrinterConfigError(
                 "pyserial not installed. `pip install pyserial` to use Serial backend."
             )
         self.port = port
@@ -43,12 +48,15 @@ class SerialBackend(BaseBackend):
         self.timeout = float(timeout)
 
     def send(self, data: bytes) -> None:
-        ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
         try:
-            ser.write(data)
-            ser.flush()
-        finally:
-            ser.close()
+            ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+            try:
+                ser.write(data)
+                ser.flush()
+            finally:
+                ser.close()
+        except Exception as exc:
+            raise map_exception(exc) from exc
 
 
 class USBBackend(BaseBackend):
@@ -61,7 +69,7 @@ class USBBackend(BaseBackend):
         interface: Optional[int] = None,
     ):
         if usb is None:
-            raise RuntimeError(
+            raise PrinterConfigError(
                 "pyusb not installed. `pip install pyusb` and install a USB backend (libusb) to use USB."
             )
         self.vendor_id = int(vendor_id)
@@ -111,9 +119,28 @@ class USBBackend(BaseBackend):
             self._ep_out.write(data[i:i + CHUNK])
 
 
+class DryRunBackend(BaseBackend):
+    """Backend that captures bytes without touching any hardware.
+
+    Useful for testing the print pipeline end-to-end in CI.
+    """
+
+    def __init__(self) -> None:
+        self.sent_chunks: list[bytes] = []
+
+    def send(self, data: bytes) -> None:
+        self.sent_chunks.append(data)
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(len(c) for c in self.sent_chunks)
+
+
 def make_backend(cfg: dict) -> BaseBackend:
     """Factory to build a backend from your printer config dict."""
     iface = (cfg.get("interface") or "network").lower()
+    if iface == "dry_run":
+        return DryRunBackend()
     if iface == "network":
         return NetworkBackend(cfg.get("host", "127.0.0.1"), int(cfg.get("port", 9100)))
     if iface == "serial":
@@ -126,6 +153,6 @@ def make_backend(cfg: dict) -> BaseBackend:
         iface_no = cfg.get("usb_interface")
         iface_no = int(iface_no) if iface_no is not None else None
         if not (vid and pid):
-            raise RuntimeError("USB backend requires usb_vid and usb_pid in config.")
+            raise PrinterConfigError("USB backend requires usb_vid and usb_pid in config.")
         return USBBackend(vid, pid, out_endpoint=ep, interface=iface_no)
-    raise ValueError(f"Unknown interface: {iface}")
+    raise PrinterConfigError(f"Unknown interface: {iface}")

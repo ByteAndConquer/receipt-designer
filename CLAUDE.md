@@ -13,9 +13,10 @@ Receipt Designer (Receipt Lab) is a PySide6-based GUI application for designing 
 ```
 receipt-designer/                  # repo root
 ├── run_receipt_designer.py        # Standalone launcher script
+├── pyproject.toml                 # Package metadata & dependency spec
 ├── ReceiptDesigner.spec           # PyInstaller build spec
 ├── receipt_designer_version.txt   # Win32 version-info resource for PyInstaller
-├── requirements.txt               # Runtime dependencies
+├── requirements.txt               # Runtime dependencies (mirrors pyproject.toml)
 ├── requirements-dev.txt           # Dev/test dependencies (pytest)
 ├── pytest.ini                     # Pytest configuration
 ├── .gitignore
@@ -38,15 +39,34 @@ receipt-designer/                  # repo root
 │   │   ├── worker.py              # Background print worker (ESC/POS + raw socket)
 │   │   └── profiles.py            # Printer profiles
 │   ├── ui/                        # UI components
-│   │   ├── main_window.py         # MainWindow facade
-│   │   ├── main_window_impl.py    # Full MainWindow implementation
+│   │   ├── main_window.py         # MainWindow facade (thin re-export)
+│   │   ├── main_window_impl.py    # MainWindow coordinator (~1,800 lines)
+│   │   ├── host_protocols.py      # Typing-only Protocol definitions for mw coupling
+│   │   ├── actions.py             # Toolbar/menu/shortcut builder
+│   │   ├── persistence.py         # Save/load/autosave/recent-files/asset portability
+│   │   ├── presets.py             # Layout preset definitions + fortune-cookie helper
+│   │   ├── layout_ops.py          # Align/distribute/group/z-order/lock/nudge/duplicate
+│   │   ├── common.py              # Shared tiny helpers (px_per_mm_factor, unpack_margins_mm)
 │   │   ├── items.py               # QGraphicsItem subclasses (GItem, GLineItem, shapes)
 │   │   ├── inline_editor.py       # Inline text editor
 │   │   ├── layers.py              # Layer panel
 │   │   ├── views.py               # RulerView and related view classes
 │   │   ├── toolbox.py             # Tool palette
 │   │   ├── properties.py          # Properties panel
-│   │   └── variables.py           # Variable management panel
+│   │   ├── variables.py           # Variable management panel
+│   │   ├── canvas/                # Scene/view creation and paper management
+│   │   │   └── controller.py      # build_scene_view, setup_inline_editor, update_paper
+│   │   ├── docks/                 # Dock widget builders
+│   │   │   ├── __init__.py        # build_docks orchestrator + update_view_menu
+│   │   │   ├── layers_dock.py     # build_layers_dock
+│   │   │   ├── properties_dock.py # build_properties_dock
+│   │   │   └── variables_dock.py  # build_variables_dock
+│   │   └── dialogs/               # Standalone dialog functions/classes
+│   │       ├── __init__.py        # Re-export hub
+│   │       ├── print_preview.py   # PrintPreviewDialog
+│   │       ├── keyboard_shortcuts.py # show_keyboard_shortcuts_dialog
+│   │       ├── duplicate_offset.py   # show_duplicate_offset_dialog
+│   │       └── printer_config.py     # show_printer_config_dialog
 │   └── assets/                    # Static assets
 │       └── icons/                 # App icons (PNG + ICO in multiple sizes)
 │
@@ -61,7 +81,7 @@ receipt-designer/                  # repo root
 ## Tech Stack
 
 - **UI Framework:** PySide6 (Qt6 for Python)
-- **Barcode Generation:** python-barcode, qrcode, treepoem (advanced 2D symbologies; requires Ghostscript)
+- **Barcode Generation:** python-barcode, qrcode, treepoem (optional; advanced 2D symbologies; requires Ghostscript)
 - **Image Processing:** Pillow
 - **Printer Communication:**
   - Network: raw sockets (port 9100)
@@ -77,6 +97,9 @@ pip install -r requirements.txt
 
 # Dev/test dependencies (adds pytest)
 pip install -r requirements-dev.txt
+
+# Optional: advanced 2D barcodes (also needs Ghostscript on PATH)
+pip install treepoem
 ```
 
 ## Run
@@ -156,6 +179,68 @@ UI items inherit from Qt graphics classes with `ContextMenuMixin`:
 - `GLineItem`, `GRectItem`, `GEllipseItem`, `GStarItem`, `GDiamondItem`, `GArrowItem` - shapes
 - `GuideLineItem`, `GuideGridItem` - design guides
 
+### UI Module Architecture
+
+The `ui/` package follows a **coordinator + extracted-module** pattern. `MainWindow` (in `main_window_impl.py`) is the central coordinator; cohesive feature blocks are extracted into standalone modules that receive `mw` (the MainWindow instance) as their first argument.
+
+#### Module Responsibilities
+
+| Module | What lives here |
+|---|---|
+| `main_window_impl.py` | MainWindow class — wires everything together, owns Qt lifecycle (`__init__`, `closeEvent`), selection sync, and short methods that don't justify their own module. ~1,800 lines. |
+| `actions.py` | `build_toolbars_and_menus(mw)` — creates all toolbars, menus, keyboard shortcuts, and connects them to `mw` slots. |
+| `canvas/controller.py` | `build_scene_view(mw)`, `setup_inline_editor(mw)`, `update_paper(mw)` — QGraphicsScene/View creation, paper-size changes, inline text-editing overlay. |
+| `docks/` | `build_docks(mw)`, `update_view_menu(mw)` + per-dock builders (`layers_dock`, `properties_dock`, `variables_dock`). Creates and wires all dock widgets. |
+| `dialogs/` | Standalone dialog functions/classes (`PrintPreviewDialog`, `show_printer_config_dialog`, etc.). These accept **primitive data** (QWidget parent, QImage, dict) — they do *not* touch `mw` attributes. |
+| `persistence.py` | Save, load, save-as, autosave, crash recovery, recent-files menu, asset portability (18 functions). |
+| `presets.py` | Layout preset definitions, `apply_preset(mw, name)`, fortune-cookie API helper. |
+| `layout_ops.py` | Align, distribute, group/ungroup, z-order, lock/unlock, hide/show, baseline snap, nudge, duplicate, delete (13 functions). |
+| `common.py` | Tiny shared helpers (`px_per_mm_factor`, `unpack_margins_mm`) used by 2+ UI modules to avoid copy-paste. |
+| `host_protocols.py` | Typing-only `Protocol` classes that document which `mw` attributes each module requires (see *Protocol Guardrails* below). |
+
+#### The `mw` Rule
+
+> **Extracted modules receive `mw` as a parameter — they must never `import main_window_impl`.**
+
+This avoids circular imports and keeps the dependency arrow one-way:
+
+```
+main_window_impl  ──imports──►  persistence / presets / layout_ops / actions / …
+       │                                     │
+       └──── passes self as mw ─────────────►┘
+```
+
+Each extracted module can import from `core/`, `printing/`, or sibling UI modules (`items`, `layers`, `views`, etc.), but **not** from `main_window_impl` or `main_window`.
+
+#### Where to Put New Features (Decision Guide)
+
+| If the new code… | Put it in… |
+|---|---|
+| Builds toolbars, menus, or shortcuts | `actions.py` |
+| Creates/configures scene, view, or paper | `canvas/controller.py` |
+| Creates/wires dock widgets | `docks/` |
+| Is a standalone dialog (no `mw` attribute access) | `dialogs/` |
+| Handles save/load/autosave/recent-files | `persistence.py` |
+| Adds or modifies layout presets | `presets.py` |
+| Performs align/distribute/group/z-order/lock/nudge ops | `layout_ops.py` |
+| Is a short (< 15 line) method tightly coupled to MainWindow state | Keep it in `main_window_impl.py` |
+| Doesn't fit any of the above but is > ~50 lines | Create a new `ui/<name>.py` module; follow the `mw` rule |
+
+#### Protocol Guardrails
+
+`host_protocols.py` defines `typing.Protocol` classes that declare the `mw` attributes each module actually uses. These are **static-only** (guarded by `TYPE_CHECKING`) — they add zero runtime cost.
+
+| Protocol | Used by |
+|---|---|
+| `CanvasHost` | `canvas/controller.py` |
+| `DocksHost` | `docks/__init__.py`, `docks/layers_dock.py`, `docks/properties_dock.py`, `docks/variables_dock.py` |
+| `ActionsHost` | `actions.py` |
+| `PersistenceHost` | `persistence.py` |
+| `PresetsHost` | `presets.py` |
+| `LayoutHost` | `layout_ops.py` |
+
+If you add a new attribute to MainWindow that an extracted module needs, add it to the matching Protocol first. This catches attribute-name drift at type-check time (e.g., via `mypy` or `pyright`).
+
 ## Key Conventions
 
 ### Measurements
@@ -179,7 +264,7 @@ Receipt templates use `.receipt` file extension.
 | USB | `pyusb` | `printing/backends.py` | Direct USB device communication |
 | ESC/POS | `python-escpos` | `printing/worker.py` | High-level thermal printer protocol; wraps Network/Serial/USB |
 
-`treepoem` (in `core/barcodes.py`) adds support for advanced 2D symbologies such as PDF417, DataMatrix, and Aztec. It requires Ghostscript to be installed and on PATH.
+`treepoem` (in `core/barcodes.py`) optionally adds support for advanced 2D symbologies such as PDF417, DataMatrix, and Aztec. It is not included in the default dependencies. Install it separately (`pip install treepoem`). It also requires Ghostscript to be installed and on PATH.
 
 ## Common Tasks
 

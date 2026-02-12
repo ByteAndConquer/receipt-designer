@@ -5,6 +5,7 @@ from typing import Optional
 from PySide6 import QtCore, QtGui
 
 from .backends import make_backend  # fallback if python-escpos is missing
+from .exceptions import friendly_message
 
 # Optional python-escpos support (this is what legacy used)
 _ESC_POS_AVAILABLE = True
@@ -45,11 +46,13 @@ class PrinterWorker(QtCore.QThread):
         }
     }
     """
-    def __init__(self, action: str, payload=None, parent=None):
+    def __init__(self, action: str, payload=None, parent=None, *, dry_run: bool = False):
         super().__init__(parent)
         self.action = (action or "").lower()
         self.payload = payload or {}
         self.signals = WorkerSignals()
+        self.dry_run = dry_run
+        self.dry_run_backend = None  # set after run() if dry_run is True
 
     # ---------------- escpos helpers ----------------
 
@@ -295,6 +298,31 @@ class PrinterWorker(QtCore.QThread):
 
         backend.send(bytes(data))
 
+    # ---------------- dry-run path ----------------
+
+    def _run_dry(self, cfg: dict):
+        """Execute the action against a DryRunBackend (no hardware)."""
+        from .backends import DryRunBackend
+
+        backend = DryRunBackend()
+        data = bytearray()
+        data += self._escpos_init()
+
+        if self.action == "print":
+            # Simulate a minimal print payload (init + cut)
+            cut_code = (cfg.get("cut_mode") or "partial").lower()
+            data += self._escpos_cut(cut_code)
+        elif self.action == "feed":
+            data += bytes([0x1B, 0x64, 3])
+        elif self.action == "cut":
+            cut_code = (cfg.get("cut_mode") or "partial").lower()
+            data += self._escpos_cut(cut_code)
+        else:
+            raise RuntimeError(f"Unknown print action: {self.action}")
+
+        backend.send(bytes(data))
+        self.dry_run_backend = backend
+
     # ---------------- thread entry ----------------
 
     def run(self):
@@ -306,9 +334,12 @@ class PrinterWorker(QtCore.QThread):
                 "action=", self.action,
                 "escpos_available=", _ESC_POS_AVAILABLE,
                 "image_lib=", (Image is not None),
+                "dry_run=", self.dry_run,
             )
 
-            if _ESC_POS_AVAILABLE and Image is not None:
+            if self.dry_run:
+                self._run_dry(cfg)
+            elif _ESC_POS_AVAILABLE and Image is not None:
                 # Full legacy-style path using python-escpos
                 self._run_with_escpos(cfg)
             else:
@@ -316,10 +347,10 @@ class PrinterWorker(QtCore.QThread):
                 self._run_raw_fallback(cfg)
 
         except Exception as e:
-            self.signals.error.emit(str(e))
+            self.signals.error.emit(friendly_message(e))
         finally:
-            # Always emit finished once we’re done/error.
-            # It’s okay if caller didn’t connect anything.
+            # Always emit finished once we're done/error.
+            # It's okay if caller didn't connect anything.
             try:
                 self.signals.finished.emit()
             except Exception:
