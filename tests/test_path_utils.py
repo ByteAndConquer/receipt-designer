@@ -159,6 +159,25 @@ class TestResolveAssetPath:
         """No template path returns asset unchanged."""
         assert resolve_asset_path("assets/logo.png", "") == "assets/logo.png"
 
+    def test_relative_traversal_rejected(self, tmp_path):
+        """Relative paths that escape the template directory are refused."""
+        template_path = str(tmp_path / "receipt.json")
+        (tmp_path / "receipt.json").write_text("{}")
+        # Classic path traversal
+        assert resolve_asset_path("../../../etc/passwd", template_path) == ""
+        assert resolve_asset_path("..\\..\\secret.png", template_path) == ""
+
+    def test_relative_inside_template_ok(self, tmp_path):
+        """Relative paths that stay under the template dir resolve."""
+        template_path = str(tmp_path / "receipt.json")
+        (tmp_path / "receipt.json").write_text("{}")
+        assets = tmp_path / "assets"
+        assets.mkdir()
+        (assets / "logo.png").write_bytes(b"PNG")
+        result = resolve_asset_path("assets/logo.png", template_path)
+        assert result
+        assert os.path.normcase(result) == os.path.normcase(str(assets / "logo.png"))
+
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific test")
     def test_relative_resolved_to_absolute(self):
         """Relative path resolved against template directory."""

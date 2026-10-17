@@ -146,13 +146,19 @@ def make_backend(cfg: dict) -> BaseBackend:
     if iface == "serial":
         return SerialBackend(cfg.get("serial_port", "COM1"), int(cfg.get("baudrate", 19200)))
     if iface == "usb":
-        vid = int(cfg.get("usb_vid", 0))
-        pid = int(cfg.get("usb_pid", 0))
-        ep = cfg.get("usb_endpoint")
-        ep = int(ep) if ep is not None else None
+        from .usb_devices import parse_usb_id
+
+        from .usb_devices import MAX_ENDPOINT
+
+        vid = parse_usb_id(cfg.get("usb_vid"))
+        pid = parse_usb_id(cfg.get("usb_pid"))
+        # Prefer explicit OUT endpoint; fall back to legacy usb_endpoint key.
+        ep = parse_usb_id(cfg.get("usb_out"), max_value=MAX_ENDPOINT)
+        if ep is None:
+            ep = parse_usb_id(cfg.get("usb_endpoint"), max_value=MAX_ENDPOINT)
         iface_no = cfg.get("usb_interface")
         iface_no = int(iface_no) if iface_no is not None else None
-        if not (vid and pid):
+        if vid is None or pid is None:
             raise PrinterConfigError("USB backend requires usb_vid and usb_pid in config.")
         return USBBackend(vid, pid, out_endpoint=ep, interface=iface_no)
     raise PrinterConfigError(f"Unknown interface: {iface}")

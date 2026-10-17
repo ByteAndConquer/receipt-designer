@@ -237,6 +237,33 @@ class VariableManager:
 
 # ---------- Template / document ----------
 
+# Bounds applied when loading untrusted template JSON (DoS / OOM guard).
+_MIN_DIM_MM = 1.0
+_MAX_DIM_MM = 500.0
+_MIN_DPI = 72
+_MAX_DPI = 600
+_MAX_MARGIN_MM = 100.0
+_MAX_ELEMENTS = 5000
+
+
+def _clamp_float(value: Any, lo: float, hi: float, default: float) -> float:
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return default
+    if x != x:  # NaN
+        return default
+    return max(lo, min(hi, x))
+
+
+def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
+    try:
+        x = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, x))
+
+
 @dataclass
 class Template:
     # page / printer
@@ -287,22 +314,40 @@ class Template:
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Template":
         # Use same default as dataclass field: (4.0, 0.0, 4.0, 0.0)
+        raw_margins = d.get("margins_mm", (4.0, 0.0, 4.0, 0.0))
+        try:
+            margins = tuple(raw_margins)
+            if len(margins) != 4:
+                margins = (4.0, 0.0, 4.0, 0.0)
+            else:
+                margins = tuple(
+                    _clamp_float(m, 0.0, _MAX_MARGIN_MM, 0.0) for m in margins
+                )
+        except (TypeError, ValueError):
+            margins = (4.0, 0.0, 4.0, 0.0)
+
         t = Template(
-            width_mm=d.get("width_mm", 80.0),
-            height_mm=d.get("height_mm", 75.0),
-            dpi=d.get("dpi", 203),
-            margins_mm=tuple(d.get("margins_mm", (4.0, 0.0, 4.0, 0.0))),
-            name=d.get("name", "Untitled"),
-            version=d.get("version", "1.0"),
+            width_mm=_clamp_float(d.get("width_mm", 80.0), _MIN_DIM_MM, _MAX_DIM_MM, 80.0),
+            height_mm=_clamp_float(d.get("height_mm", 75.0), _MIN_DIM_MM, _MAX_DIM_MM, 75.0),
+            dpi=_clamp_int(d.get("dpi", 203), _MIN_DPI, _MAX_DPI, 203),
+            margins_mm=margins,  # type: ignore[arg-type]
+            name=str(d.get("name", "Untitled"))[:256],
+            version=str(d.get("version", "1.0"))[:32],
         )
-        t.elements = [Element.from_dict(x) for x in d.get("elements", [])]
-        t.guides = [GuideLine.from_dict(x) for x in d.get("guides", [])]
+        raw_elements = d.get("elements", [])
+        if not isinstance(raw_elements, list):
+            raw_elements = []
+        t.elements = [Element.from_dict(x) for x in raw_elements[:_MAX_ELEMENTS]]
+        raw_guides = d.get("guides", [])
+        if not isinstance(raw_guides, list):
+            raw_guides = []
+        t.guides = [GuideLine.from_dict(x) for x in raw_guides[:_MAX_ELEMENTS]]
         g = d.get("grid")
         if g:
             t.grid = GuideGrid.from_dict(g)
-        
+
         # Load variables if present
         if "variables" in d:
             t.variable_manager = VariableManager.from_dict(d["variables"])
-        
+
         return t

@@ -78,20 +78,22 @@ def qapp():
 @pytest.fixture
 def autosave_path():
     """Get the autosave file path and ensure cleanup."""
-    temp_dir = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.TempLocation
-    )
-    path = os.path.join(temp_dir, "receipt_designer_autosave.json")
+    from receipt_designer.ui.persistence import _autosave_path, _legacy_autosave_path
 
-    # Clean up before test
-    if os.path.exists(path):
-        os.remove(path)
+    path = _autosave_path()
+    assert path, "autosave path should resolve under app data or temp"
+    legacy = _legacy_autosave_path()
+
+    # Clean up before test (new + legacy locations)
+    for p in {path, legacy}:
+        if p and os.path.exists(p):
+            os.remove(p)
 
     yield path
 
-    # Clean up after test
-    if os.path.exists(path):
-        os.remove(path)
+    for p in {path, legacy}:
+        if p and os.path.exists(p):
+            os.remove(p)
 
 
 # ============================================================================

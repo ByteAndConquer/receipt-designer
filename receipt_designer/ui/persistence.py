@@ -29,6 +29,39 @@ if TYPE_CHECKING:
 # Debug flag for autosave/recovery troubleshooting
 DEBUG_AUTOSAVE = False
 
+_AUTOSAVE_FILENAME = "receipt_designer_autosave.json"
+
+
+def _autosave_path() -> str | None:
+    """Return the autosave file path under the per-user app data directory.
+
+    Prefer ``AppLocalDataLocation`` over shared temp to avoid predictable
+    symlink races on multi-user systems. Falls back to TempLocation if needed.
+    """
+    for loc in (
+        QtCore.QStandardPaths.AppLocalDataLocation,
+        QtCore.QStandardPaths.TempLocation,
+    ):
+        base = QtCore.QStandardPaths.writableLocation(loc)
+        if not base:
+            continue
+        try:
+            os.makedirs(base, mode=0o700, exist_ok=True)
+        except OSError:
+            continue
+        return os.path.join(base, _AUTOSAVE_FILENAME)
+    return None
+
+
+def _legacy_autosave_path() -> str | None:
+    """Previous autosave location (shared temp) — checked for crash recovery only."""
+    temp_dir = QtCore.QStandardPaths.writableLocation(
+        QtCore.QStandardPaths.TempLocation
+    )
+    if not temp_dir:
+        return None
+    return os.path.join(temp_dir, _AUTOSAVE_FILENAME)
+
 
 # ---------------------------------------------------------------------------
 # Pure utility helpers (no mw dependency)
@@ -438,14 +471,10 @@ def auto_save(mw: PersistenceHost) -> None:
             print("[AUTOSAVE DEBUG] Skipping autosave: no items in scene")
         return
 
-    temp_dir = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.TempLocation
-    )
-    if not temp_dir:
-        print("Auto-save failed: No writable temp directory available")
+    autosave_path = _autosave_path()
+    if not autosave_path:
+        print("Auto-save failed: No writable app data directory available")
         return
-
-    autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
 
     # Serialize
     try:
@@ -511,20 +540,24 @@ def auto_save(mw: PersistenceHost) -> None:
 
 def load_crash_recovery(mw: PersistenceHost) -> None:
     """Check for auto-saved file on startup and offer to restore."""
-    temp_dir = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.TempLocation
-    )
-    if not temp_dir:
-        if DEBUG_AUTOSAVE:
-            print("[AUTOSAVE DEBUG] No temp dir available")
-        return
+    autosave_path = _autosave_path()
+    legacy_path = _legacy_autosave_path()
 
-    autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
+    # Prefer the new app-data location; fall back to legacy temp autosave once.
+    if autosave_path and os.path.exists(autosave_path):
+        pass
+    elif legacy_path and os.path.exists(legacy_path):
+        autosave_path = legacy_path
+    else:
+        autosave_path = autosave_path or legacy_path
 
     if DEBUG_AUTOSAVE:
         print(f"[AUTOSAVE DEBUG] Checking for autosave at: {autosave_path}")
-        print(f"[AUTOSAVE DEBUG] File exists: {os.path.exists(autosave_path)}")
-        if os.path.exists(autosave_path):
+        print(
+            f"[AUTOSAVE DEBUG] File exists: "
+            f"{bool(autosave_path and os.path.exists(autosave_path))}"
+        )
+        if autosave_path and os.path.exists(autosave_path):
             import datetime
             mtime = os.path.getmtime(autosave_path)
             mtime_str = datetime.datetime.fromtimestamp(mtime).isoformat()
@@ -538,7 +571,7 @@ def load_crash_recovery(mw: PersistenceHost) -> None:
             except Exception as e:
                 print(f"[AUTOSAVE DEBUG] Error reading autosave: {e}")
 
-    if not os.path.exists(autosave_path):
+    if not autosave_path or not os.path.exists(autosave_path):
         if DEBUG_AUTOSAVE:
             print("[AUTOSAVE DEBUG] No autosave file found, skipping recovery")
         return
@@ -607,22 +640,18 @@ def load_crash_recovery(mw: PersistenceHost) -> None:
 
 
 def delete_autosave_file(mw: PersistenceHost) -> None:
-    """Delete the autosave file if it exists."""
-    temp_dir = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.TempLocation
-    )
-    if not temp_dir:
-        return
-
-    autosave_path = os.path.join(temp_dir, "receipt_designer_autosave.json")
-    try:
-        if os.path.exists(autosave_path):
-            os.remove(autosave_path)
+    """Delete the autosave file if it exists (app-data and legacy temp)."""
+    for path in (_autosave_path(), _legacy_autosave_path()):
+        if not path:
+            continue
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                if DEBUG_AUTOSAVE:
+                    print(f"[AUTOSAVE DEBUG] Deleted autosave file: {path}")
+        except Exception as e:
             if DEBUG_AUTOSAVE:
-                print(f"[AUTOSAVE DEBUG] Deleted autosave file: {autosave_path}")
-    except Exception as e:
-        if DEBUG_AUTOSAVE:
-            print(f"[AUTOSAVE DEBUG] Failed to delete autosave file: {e}")
+                print(f"[AUTOSAVE DEBUG] Failed to delete autosave file: {e}")
 
 
 # ---------------------------------------------------------------------------

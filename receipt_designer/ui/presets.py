@@ -52,9 +52,15 @@ def get_random_fortune() -> tuple[str, str]:
         lucky_str = " ".join(f"{n:02d}" for n in nums)
         return text, lucky_str
 
+    # Cap response size to limit memory DoS from a compromised / hostile API.
+    _MAX_FORTUNE_BYTES = 64 * 1024
+
     try:
         with urllib.request.urlopen(FORTUNE_API_URL, timeout=3.0) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
+            raw_bytes = resp.read(_MAX_FORTUNE_BYTES + 1)
+            if len(raw_bytes) > _MAX_FORTUNE_BYTES:
+                raise ValueError("Fortune API response too large")
+            raw = raw_bytes.decode("utf-8", errors="ignore")
 
         data = json.loads(raw)
 

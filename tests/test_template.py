@@ -25,6 +25,15 @@ class TestTemplateDefaults:
         t = Template.from_dict({"margins_mm": [10.0, 5.0, 10.0, 5.0]})
         assert t.margins_mm == (10.0, 5.0, 10.0, 5.0)
 
+    def test_from_dict_clamps_huge_dimensions(self):
+        """Malicious / corrupt templates cannot allocate huge bitmaps."""
+        t = Template.from_dict(
+            {"width_mm": 1e12, "height_mm": -5, "dpi": 99999}
+        )
+        assert t.width_mm == 500.0
+        assert t.height_mm == 1.0
+        assert t.dpi == 600
+
 
 class TestTemplateRoundtrip:
     """Tests for Template to_dict / from_dict roundtrip."""

@@ -105,16 +105,36 @@ def make_asset_path_portable(asset_path: str, template_path: str) -> str:
     return asset_path
 
 
+def is_path_under_directory(path: str, directory: str) -> bool:
+    """Return True if *path* resolves inside *directory* (symlink-aware)."""
+    if not path or not directory:
+        return False
+    try:
+        path_real = os.path.normcase(os.path.realpath(path))
+        dir_real = os.path.normcase(os.path.realpath(directory))
+        common = os.path.commonpath([dir_real, path_real])
+        return common == dir_real
+    except (ValueError, OSError, TypeError):
+        return False
+
+
 def resolve_asset_path(asset_path: str, template_path: str) -> str:
     """
     Resolve an asset path, converting relative paths to absolute based on template location.
+
+    Relative paths that escape the template directory via ``..`` (or symlink tricks)
+    are rejected and return an empty string so the UI shows a missing image instead
+    of reading arbitrary local files from a malicious shared template.
+
+    Absolute / UNC paths are returned unchanged (typically user-picked via file dialog).
 
     Args:
         asset_path: The asset file path from the template (may be relative or absolute)
         template_path: The path to the template JSON file being loaded
 
     Returns:
-        Absolute path if input was relative, else original path unchanged.
+        Absolute path if input was a safe relative path, original absolute path
+        unchanged, or ``""`` if a relative path escapes the template directory.
     """
     if not asset_path:
         return asset_path
@@ -129,8 +149,13 @@ def resolve_asset_path(asset_path: str, template_path: str) -> str:
 
     try:
         template_dir = os.path.dirname(os.path.abspath(template_path))
-        resolved = os.path.normpath(os.path.join(template_dir, asset_path))
+        # Normalize separators so Windows-style "..\\" escapes are caught on Unix too
+        portable = asset_path.replace("\\", os.sep)
+        resolved = os.path.normpath(os.path.join(template_dir, portable))
+        # Block path traversal outside the template directory
+        if not is_path_under_directory(resolved, template_dir):
+            return ""
         return resolved
     except Exception:
-        # Any error - keep original path
-        return asset_path
+        # Any error - refuse rather than guessing
+        return ""

@@ -3,8 +3,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import json
 import os
 import random
-import urllib.request
-
 # Split modules
 from ..core.models import Element, Template
 from ..core.commands import AddItemCmd, DeleteItemCmd, MoveResizeCmd, PropertyChangeCmd, GroupItemsCmd, UngroupItemsCmd  # ready for future use
@@ -1088,6 +1086,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "interface": s.value("printer/interface", "network"),
             "host": s.value("printer/host", "192.168.1.50"),
             "port": int(s.value("printer/port", 9100)),
+            "usb_vid": s.value("printer/usb_vid", "") or "",
+            "usb_pid": s.value("printer/usb_pid", "") or "",
+            "usb_in": s.value("printer/usb_in", "") or "",
+            "usb_out": s.value("printer/usb_out", "") or "",
             "darkness": int(s.value("printer/darkness", 200)),
             "threshold": int(s.value("printer/threshold", 180)),
             "cut_mode": (s.value("printer/cut_mode", "partial") or "partial"),
@@ -1105,6 +1107,10 @@ class MainWindow(QtWidgets.QMainWindow):
         s.setValue("printer/interface", cfg.get("interface", "network"))
         s.setValue("printer/host", cfg.get("host", "192.168.1.50"))
         s.setValue("printer/port", int(cfg.get("port", 9100)))
+        s.setValue("printer/usb_vid", str(cfg.get("usb_vid", "") or ""))
+        s.setValue("printer/usb_pid", str(cfg.get("usb_pid", "") or ""))
+        s.setValue("printer/usb_in", str(cfg.get("usb_in", "") or ""))
+        s.setValue("printer/usb_out", str(cfg.get("usb_out", "") or ""))
         s.setValue("printer/darkness", int(cfg.get("darkness", 200)))
         s.setValue("printer/threshold", int(cfg.get("threshold", 180)))
         s.setValue("printer/cut_mode", cfg.get("cut_mode", "partial"))
